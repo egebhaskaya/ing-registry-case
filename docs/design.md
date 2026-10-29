@@ -1,5 +1,11 @@
 # User Registration Burst Processing — Implementation Plan
 
+> Implementation update (2026-10-29): the original plan below is retained as the initial case design.
+> The requested synchronous comparison is now implemented as `POST /registrations/sync`, sharing
+> transaction/idempotency rules and bounded processing capacity with the Rabbit path. See
+> [synchronous-registration.md](synchronous-registration.md) for its contract and measured runs, and
+> [the README monitoring guide](../README.md#monitoring) for the expanded Grafana dashboard.
+
 ## 1. Objective
 
 Build a small, explainable **Java 25 + Spring Boot** case that accepts a short burst of **10,000 registration requests** through an asynchronous **`202 Accepted` API**, processes them with bounded concurrency, and notifies a Compliance service through a transactional outbox, Debezium CDC, and Kafka.

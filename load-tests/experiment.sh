@@ -66,7 +66,8 @@ if command -v cygpath > /dev/null 2>&1; then JAR="$(cygpath -w "$JAR")"; fi
 # ---- start Registry with this experiment's consumer count -------------------------------------
 args=(-jar "$JAR"
       "--spring.rabbitmq.listener.simple.concurrency=$CONSUMERS"
-      "--spring.rabbitmq.listener.simple.max-concurrency=$CONSUMERS")
+      "--spring.rabbitmq.listener.simple.max-concurrency=$CONSUMERS"
+      "--registry.processing.max-concurrency=$CONSUMERS")
 [ -n "$PROFILE" ] && args+=("--spring.profiles.active=$PROFILE")
 "$JAVA" "${args[@]}" > "$LOG_DIR/$RUN_ID.registry.log" 2>&1 &
 REG_PID=$!
@@ -84,7 +85,7 @@ echo "registry reports: consumers=${consumers_seen:-?} prefetch=${prefetch_seen:
 
 # ---- the burst --------------------------------------------------------------------------------
 T0_EPOCH="$(date +%s)"
-RUN_ID="$RUN_ID" ITERATIONS="$ITERATIONS" VUS="$VUS" bash "$HERE/run-k6.sh" | tee "$LOG_DIR/$RUN_ID.k6.txt"
+MODE=async RUN_ID="$RUN_ID" ITERATIONS="$ITERATIONS" VUS="$VUS" bash "$HERE/run-k6.sh" | tee "$LOG_DIR/$RUN_ID.k6.txt"
 K6_TXT="$LOG_DIR/$RUN_ID.k6.txt"
 iterations="$(sed -n 's/^iterations: *\([0-9]*\).*/\1/p' "$K6_TXT")"
 accepted="$(sed -n 's/^accepted (202): *\([0-9]*\).*/\1/p' "$K6_TXT")"

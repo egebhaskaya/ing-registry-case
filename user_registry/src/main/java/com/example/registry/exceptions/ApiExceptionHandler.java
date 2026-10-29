@@ -2,12 +2,12 @@ package com.example.registry.exceptions;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
- * Maps intake exceptions to HTTP responses (design section 4: controlled,
- * distinguishable non-success).
+ * Maps registration conflicts and intake/processing overload to distinguishable HTTP responses.
  *
  * <p>
  * {@code @RestControllerAdvice} applies to every controller. Each
@@ -20,11 +20,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * 
  * The 400 cases (missing header, bad UUID, validation, unknown JSON field) are
  * handled by Spring itself
- * because {@code spring.mvc.problemdetails.enabled=true}; this class only adds
- * the 503 family.
+ * because {@code spring.mvc.problemdetails.enabled=true}; this class adds synchronous 409 conflicts
+ * and the 503 family.
  *
  * <p>
- * All three are 503 (the service cannot take the request right now) but the
+ * Intake failures are 503 (the service cannot take the request right now) but the
  * {@code reason} property
  * tells a client whether the command definitely did not get through (it may
  * retry immediately) or
@@ -33,6 +33,30 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  */
 @RestControllerAdvice
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(SynchronousRegistrationOverloadedException.class)
+    ResponseEntity<ProblemDetail> synchronousOverloaded(SynchronousRegistrationOverloadedException e) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "1")
+                .body(problem("Registration processing overloaded", e.getMessage(), "sync_overloaded"));
+    }
+
+    @ExceptionHandler(ConflictingPayloadException.class)
+    ProblemDetail conflictingPayload(ConflictingPayloadException e) {
+        return conflict(e.getMessage(), "idempotency_conflict");
+    }
+
+    @ExceptionHandler(EmailAlreadyRegisteredException.class)
+    ProblemDetail emailAlreadyRegistered(EmailAlreadyRegisteredException e) {
+        return conflict(e.getMessage(), "email_already_registered");
+    }
+
+    private static ProblemDetail conflict(String detail, String reason) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, detail);
+        problem.setTitle("Registration conflict");
+        problem.setProperty("reason", reason);
+        return problem;
+    }
 
     @ExceptionHandler(IntakeOverloadedException.class)
     ProblemDetail overloaded(IntakeOverloadedException e) {

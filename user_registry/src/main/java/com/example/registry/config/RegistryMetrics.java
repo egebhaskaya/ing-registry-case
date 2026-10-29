@@ -45,12 +45,17 @@ public class RegistryMetrics {
         registry.counter("registry.intake.requests", "outcome", outcome).increment();
     }
 
-    /** One consumer result: created, duplicate_ignored, conflict. */
+    /** One synchronous HTTP decision: created, replayed, conflict, overloaded, failed. */
+    public void synchronous(String outcome) {
+        registry.counter("registry.sync.requests", "outcome", outcome).increment();
+    }
+
+    /** One committed processing result across HTTP and Rabbit: created, duplicate_ignored, conflict. */
     public void registration(String outcome) {
         registry.counter("registry.registrations", "outcome", outcome).increment();
     }
 
-    /** One consumer attempt that threw (retried attempts count every time). */
+    /** One processing attempt that threw (retried consumer attempts count every time). */
     public void registrationFailed() {
         registry.counter("registry.registrations.failures").increment();
     }
@@ -60,7 +65,7 @@ public class RegistryMetrics {
         registry.counter("registry.registrations.dead_lettered").increment();
     }
 
-    /** From the API accepting the request (submittedAt) to the user + outbox commit: includes queue waiting. */
+    /** Submission to user + outbox commit across both routes, including any queue/admission waiting. */
     public void completion(Duration duration) {
         registry.timer("registry.registration.completion").record(duration);
     }

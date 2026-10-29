@@ -86,6 +86,20 @@ smoke: ## End-to-end check: COUNT registrations through every stage (default COU
 k6: ## Fire the k6 burst only (10,000 by default; ITERATIONS and VUS override)
 	load-tests/run-k6.sh
 
+k6-sync: ## Load the synchronous commit endpoint (requires the updated Registry running)
+	MODE=sync bash load-tests/run-k6.sh
+
+sync-experiment-a: ## Synchronous experiment: 1 processing permit, DB pool 4
+	bash load-tests/sync-experiment.sh S1 1
+
+sync-experiment-b: ## Synchronous experiment: 4 processing permits, DB pool 4
+	bash load-tests/sync-experiment.sh S4 4
+
+sync-experiment-c: ## Synchronous experiment: 16 processing permits, DB pool 4
+	bash load-tests/sync-experiment.sh S16 16
+
+sync-experiments: sync-experiment-a sync-experiment-b sync-experiment-c ## Compare bounded synchronous parallelism
+
 experiment-a: ## Experiment A: 1 consumer, 10,000 registrations (stop any running Registry first)
 	load-tests/experiment.sh A 1
 
@@ -105,8 +119,8 @@ urls: ## Print the local URLs
 	@echo "Compliance health   http://localhost:8081/actuator/health"
 	@echo "RabbitMQ UI         http://localhost:15672  (guest / guest)"
 	@echo "Debezium Connect    http://localhost:8083/connectors/registry-outbox/status"
-	@echo "Prometheus          http://localhost:9090"
 	@echo "Grafana             http://localhost:3000/d/registration-case"
 
 .PHONY: help check up down clean ps connector lag build test verify registry compliance register smoke k6 \
+        k6-sync sync-experiment-a sync-experiment-b sync-experiment-c sync-experiments \
         experiment-a experiment-b experiment-c experiment-d experiments urls

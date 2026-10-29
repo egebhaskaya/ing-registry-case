@@ -3,11 +3,14 @@
 A small, explainable backend case: accept a burst of 10,000 user registrations through an asynchronous
 `202 Accepted` API, process them with bounded concurrency, and hand each completed registration to a
 Compliance service through a transactional outbox, Debezium change data capture and Kafka.
+An additional `POST /registrations/sync` commits the same user + outbox transaction during the HTTP
+request, returning the stored user with `201` (`200` on a completed idempotent replay).
 
 - The design and the reasoning behind every choice: [docs/design.md](docs/design.md)
 - What was built and what it guarantees: [docs/architecture.md](docs/architecture.md)
 - The presentation, step by step: [docs/demo-script.md](docs/demo-script.md)
 - Measured results of the 10,000-request experiments: [docs/benchmark-results.md](docs/benchmark-results.md)
+- Synchronous endpoint and bounded parallelism comparison: [docs/synchronous-registration.md](docs/synchronous-registration.md)
 
 ```
 client --POST /registrations--> Registry API --publish (confirmed)--> RabbitMQ
@@ -109,7 +112,6 @@ docker compose -f infra/compose.yml exec postgres psql -U compliance -d complian
 | What | Where |
 |------|-------|
 | Grafana dashboard "Registration Case" | <http://localhost:3000/d/registration-case> (no login; provisioned from `infra/monitoring/grafana`) |
-| Prometheus | <http://localhost:9090> (targets: registry, compliance, rabbitmq, prometheus) |
 | Registry health / metrics | <http://localhost:8080/actuator/health>, `/actuator/prometheus` |
 | Compliance health / metrics | <http://localhost:8081/actuator/health>, `/actuator/prometheus` |
 | RabbitMQ management UI | <http://localhost:15672> (guest / guest): `registration.commands`, `registration.commands.dlq` |
@@ -119,21 +121,29 @@ docker compose -f infra/compose.yml exec postgres psql -U compliance -d complian
 
 ## Monitoring
 
-Prometheus scrapes both services (`/actuator/prometheus`, through `host.docker.internal` because they
-run on the host) and RabbitMQ's built-in plugin every 5 seconds; Grafana refreshes every 5 seconds and
+Use Grafana as the monitoring interface. Prometheus runs behind it as the metrics storage and query
+backend; opening the Prometheus UI is not part of the demonstration workflow. It scrapes the main
+Registry (8080), temporary comparison Registry (8082), Compliance and RabbitMQ every 5 seconds.
+Grafana refreshes every 5 seconds and
 is provisioned entirely from files in `infra/monitoring` (data source, dashboard). No plugins, no
 internet access, no cloud account.
 
-The dashboard follows design section 8: a context row (configured consumers, prefetch, Hikari max,
-virtual-thread mode, Java version), then six panels: observed progress, throughput per second (30 s
-windows), RabbitMQ ready/unacknowledged/DLQ depth per queue, the Registry database pool (active,
-pending, max, acquisition timeouts), p95 latencies from histogram buckets (HTTP 202, registration
-completion, compliance completion, both completions measured from the original submission time), and
-errors and recovery (503 reasons, failed attempts, dead letters, deduplicated redeliveries), plus a
-diagnostics row (platform threads, heap) for the threading-mode comparison. Every panel description
-states its measurement boundary. Kafka consumer-group lag is deliberately not graphed: the consumer's
-own lag metric disappears when Compliance is stopped, which is exactly when lag matters, so the
-dashboard points to the CLI instead.
+Select the **Registry target** at the top: `host.docker.internal:8080` for the main service, or
+`host.docker.internal:8082` while a synchronous comparison runs. The latter is normally unavailable
+between experiments. Registry metrics are filtered to the selected process so capacities and pools
+from separate instances are not added together. Compliance and RabbitMQ are shared infrastructure.
+
+The dashboard separates synchronous HTTP outcomes (`201`, `200`, `409`, `503`) from asynchronous
+acceptance, shows committed pipeline progress and throughput, and compares successful-response
+latency with overall HTTP latency. Capacity panels show execution permits, active work, HTTP waiters,
+Hikari active/pending connections, acquisition time and connection timeouts. Delivery panels cover
+RabbitMQ ready/unacknowledged/DLQ depth, failed processing attempts, idempotent redeliveries and Compliance outcomes.
+JVM and configured-limit panels provide context for the concurrency experiment.
+
+Completion p95 comes from histogram buckets. Database acquisition summaries expose a mean and recent
+maximum, not a p95. Panel descriptions state the boundaries and counter-reset behavior. Kafka
+consumer-group lag remains available through `make lag`; client fetch metrics are not a substitute
+for the group's committed-offset lag.
 
 Metric names and labels are pinned by `RegistryMetricsTest` and `ComplianceMetricsTest`; labels are
 bounded (`application`, `outcome`, `queue`), never ids or emails. Application counters reset when a
@@ -198,6 +208,26 @@ record; that is the next thing to tune, not the Registry.
 Resending the same key with the same data is harmless. The same key with different data, or a new key
 with an already registered email, is accepted with `202` and then rejected by the consumer into the
 dead-letter queue; the original record is preserved. There is intentionally no status or lookup endpoint.
+
+`POST /registrations/sync` uses the same input and idempotency keys, bypassing the Rabbit command queue.
+It returns the persisted `userId`, `registrationId`, normalized fields, `createdAt`, and
+`status: REGISTERED`. Registry completion does not imply that Compliance has finished.
+
+| Response | Meaning |
+|----------|---------|
+| `201` + stored user | user and outbox committed before the response |
+| `200` + same stored user | same key and normalized payload already committed; no new event |
+| `409` `reason=idempotency_conflict` | key already committed with different data |
+| `409` `reason=email_already_registered` | email already registered under another key |
+| `400` problem detail | malformed input |
+| `503` `reason=sync_overloaded`, `Retry-After: 1` | refused before a transaction started; retry with the same key |
+
+Both routes share a configurable per-instance execution limit before database connections are
+acquired. At most 64 HTTP requests can wait for a permit, each for at most 200 ms. Rabbit consumers
+wait for capacity without treating saturation as a failed command. A network timeout after commit
+can still leave a client uncertain; retrying with the same key returns the committed record.
+If different payloads race under one key across the two routes, the first successful database commit
+wins; queue acceptance does not reserve the key/payload in the database.
 
 ## Failure handling
 
@@ -310,6 +340,9 @@ Registry, `user_registry/src/main/resources/application.yml`:
 | `spring.rabbitmq.listener.simple.prefetch` | `8` | unacknowledged deliveries per consumer, not parallelism |
 | `spring.rabbitmq.listener.simple.retry.*` | 3 retries, 500ms x2, max 5s | finite retry for transient consumer failures |
 | `registry.intake.max-in-flight` | `64` | requests allowed to wait for a broker confirmation at once |
+| `registry.processing.max-concurrency` | `4` | shared executions across synchronous HTTP and Rabbit; experiments set 1/4/16 |
+| `registry.processing.max-waiting-requests` | `64` | maximum HTTP requests waiting for execution capacity |
+| `registry.processing.admission-wait` | `200ms` | maximum HTTP capacity wait before `503 sync_overloaded` |
 | `registry.rabbit.queue-max-length` | `20000` | queue bound; overflow rejects new publishes instead of dropping accepted work |
 | `registry.rabbit.confirm-timeout` | `5s` | finite publisher-confirm wait |
 

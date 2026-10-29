@@ -10,6 +10,7 @@ import com.example.registry.models.User;
 import com.example.registry.repositories.OutboxRepository;
 import com.example.registry.repositories.UserRepository;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
@@ -74,12 +75,19 @@ public class RegistrationService {
      */
     @Transactional
     public RegistrationOutcome register(RegisterUserCommand command) {
+        return registerWithResult(command).outcome();
+    }
+
+    /** Both public entry points have a transaction; the HTTP path also needs the stored user. */
+    @Transactional
+    public RegistrationResult registerWithResult(RegisterUserCommand command) {
         Optional<User> existing = users.findByRegistrationId(command.registrationId());
         if (existing.isPresent()) {
             return outcomeForExisting(existing.get(), command);
         }
 
-        Instant now = Instant.now();
+        // PostgreSQL stores microseconds: creation and later idempotent replays return identical data.
+        Instant now = Instant.now().truncatedTo(ChronoUnit.MICROS);
         RegistrationPayload payload = command.payload();
         User user = new User(UUID.randomUUID(), command.registrationId(), command.payloadFingerprint(),
                 payload.email(), payload.fullName(), payload.countryCode(), now);
@@ -94,7 +102,7 @@ public class RegistrationService {
                 objectMapper.writeValueAsString(event), now));
 
         log.info("registration committed registrationId={} userId={}", command.registrationId(), user.id());
-        return RegistrationOutcome.CREATED;
+        return new RegistrationResult(RegistrationOutcome.CREATED, user);
     }
 
     /**
@@ -106,6 +114,11 @@ public class RegistrationService {
      */
     @Transactional(readOnly = true)
     public RegistrationOutcome resolveDuplicate(RegisterUserCommand command) {
+        return resolveDuplicateWithResult(command).outcome();
+    }
+
+    @Transactional(readOnly = true)
+    public RegistrationResult resolveDuplicateWithResult(RegisterUserCommand command) {
         Optional<User> existing = users.findByRegistrationId(command.registrationId());
         if (existing.isPresent()) {
             return outcomeForExisting(existing.get(), command);
@@ -117,10 +130,10 @@ public class RegistrationService {
                 "Unexplained uniqueness violation for registrationId=" + command.registrationId());
     }
 
-    private RegistrationOutcome outcomeForExisting(User existing, RegisterUserCommand command) {
+    private RegistrationResult outcomeForExisting(User existing, RegisterUserCommand command) {
         if (existing.payloadFingerprint().equals(command.payloadFingerprint())) {
             log.info("registration duplicate ignored registrationId={}", command.registrationId());
-            return RegistrationOutcome.DUPLICATE_IGNORED;
+            return new RegistrationResult(RegistrationOutcome.DUPLICATE_IGNORED, existing);
         }
         throw new ConflictingPayloadException(command.registrationId());
     }

@@ -8,6 +8,7 @@ import com.example.registry.config.RegistryRabbitProperties;
 import com.example.registry.dtos.RegistrationRequest;
 import com.example.registry.repositories.OutboxRepository;
 import com.example.registry.repositories.UserRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.UUID;
@@ -42,6 +43,8 @@ class RegistrationFlowTest extends AbstractIntegrationTest {
     AmqpAdmin amqpAdmin;
     @Autowired
     RegistryRabbitProperties props;
+    @Autowired
+    MeterRegistry meterRegistry;
 
     @BeforeEach
     void cleanState() {
@@ -73,6 +76,39 @@ class RegistrationFlowTest extends AbstractIntegrationTest {
             assertThat(outbox.count()).isEqualTo(1);
         });
         assertThat(rabbitTemplate.receive(props.deadLetterQueue(), 500)).isNull();
+    }
+
+    @Test
+    void synchronousCreationAndAsynchronousReplayShareIdempotency() {
+        UUID key = UUID.randomUUID();
+        RegistrationRequest request = new RegistrationRequest("Ada Lovelace", "ada@example.com", "NL");
+        client.post().uri("/registrations/sync")
+                .header("Idempotency-Key", key.toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(request)
+                .exchange().expectStatus().isCreated();
+        var stored = users.findByRegistrationId(key).orElseThrow();
+        var duplicates = meterRegistry.counter("registry.registrations", "outcome", "duplicate_ignored");
+        double duplicatesBefore = duplicates.count();
+
+        post(key, request.fullName(), request.email()).expectStatus().isAccepted();
+
+        // Wait for the real consumer to finish the duplicate transaction, rather than only checking
+        // rows that already existed before the asynchronous request was submitted.
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(duplicates.count()).isGreaterThan(duplicatesBefore);
+            assertThat(users.count()).isEqualTo(1);
+            assertThat(outbox.count()).isEqualTo(1);
+        });
+        assertThat(rabbitTemplate.receive(props.deadLetterQueue(), 500)).isNull();
+        client.post().uri("/registrations/sync")
+                .header("Idempotency-Key", key.toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(request)
+                .exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.userId").isEqualTo(stored.id().toString());
+        assertThat(users.count()).isEqualTo(1);
+        assertThat(outbox.count()).isEqualTo(1);
     }
 
     @Test

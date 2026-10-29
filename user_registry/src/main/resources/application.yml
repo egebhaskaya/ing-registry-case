@@ -83,6 +83,10 @@ management:
 
 # Our own settings. Spring binds them to the records in com.example.registry.config.
 registry:
+  processing:
+    max-concurrency: 4              # shared HTTP + Rabbit execution permits; try 1 / 4 / 16 with pool fixed at 4
+    max-waiting-requests: 64         # bounded HTTP waiters; Rabbit waiters are bounded by listener concurrency
+    admission-wait: 200ms           # HTTP returns 503 sync_overloaded if capacity is unavailable in this time
   intake:
     max-in-flight: 64               # design §4: bound on requests waiting for a broker confirmation
     admission-wait: 200ms           # how long a request may wait for a free slot before a 503

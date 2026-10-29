@@ -53,6 +53,17 @@ was built.
 8. One transaction inserts the ledger row (`ON CONFLICT DO NOTHING` on the event id) and, if the event
    is new, the demo verdict. A redelivered event finds its ledger row and changes nothing.
 
+`POST /registrations/sync` is a second entry point: validation and normalization → shared processing
+permit → the same user + outbox transaction → committed user in `201`, or the existing user in `200`
+for a same-key/same-payload replay. Business conflicts return `409` during the HTTP request. It does
+not publish a Rabbit command; Debezium and Compliance continue from the same outbox normally.
+
+`RegistrationProcessor` acquires the shared execution permit before invoking the transactional bean,
+and holds it until commit and any fresh-transaction duplicate resolution finish. Rabbit consumers
+wait for a permit; synchronous HTTP has at most 64 waiters and a 200 ms admission timeout, then `503`
+with `reason=sync_overloaded` and `Retry-After: 1`. The limit is per application instance; replicas need
+a combined database connection budget. See [the synchronous experiments](synchronous-registration.md).
+
 ## Services and packages
 
 Both services are Spring Boot 4.1.2 on Java 25 with the same package-by-layer layout
@@ -61,9 +72,9 @@ Both services are Spring Boot 4.1.2 on Java 25 with the same package-by-layer la
 
 | Concern | Registry (`user_registry`) | Compliance (`compliance`) |
 |---------|----------------------------|---------------------------|
-| Entry points | `RegistrationController` (HTTP), `RegistrationCommandListener` (RabbitMQ) | `UserRegisteredEventListener` (Kafka) |
-| Orchestration | `RegistrationIntakeService` (admission, publish, outcome mapping) | none needed |
-| Transactions | `RegistrationService.register` / `resolveDuplicate` | `ComplianceService.process` |
+| Entry points | `RegistrationController`, `SynchronousRegistrationController` (HTTP), `RegistrationCommandListener` (RabbitMQ) | `UserRegisteredEventListener` (Kafka) |
+| Orchestration | `RegistrationIntakeService` (publish), `SynchronousRegistrationService`, shared `RegistrationProcessor` (capacity, duplicate resolution, metrics) | none needed |
+| Transactions | `RegistrationService.registerWithResult` / `resolveDuplicateWithResult` (legacy outcome-only wrappers retained) | `ComplianceService.process` |
 | Persistence | `UserRepository`, `OutboxRepository` (JdbcTemplate) | `ProcessedEventRepository`, `ComplianceResultRepository` |
 | Contracts | `RegisterUserCommand`, `UserRegisteredEvent` (JSON) | `UserRegisteredEvent` (same JSON, own record) |
 | Topology | `RabbitConfig` (exchange, queue, DLX/DLQ, retry, recoverer) | `KafkaConfig` (topics, error handler, DLT) |
@@ -78,6 +89,8 @@ library between the services (the event JSON is the contract), and no interface/
 | Bound | Default | What it limits | What it does not limit |
 |-------|---------|----------------|------------------------|
 | Intake admission semaphore | 64 | requests simultaneously waiting for a publisher confirmation | queued commands, database work |
+| Shared processing permits | 4 | simultaneous Registry executions across Rabbit and HTTP, through commit | connections available from the pool |
+| HTTP waiting slots + admission timeout | 64 / 200 ms | number and duration of HTTP requests waiting for a processing permit | durable storage; overload returns `503` |
 | RabbitMQ queue `x-max-length` + `reject-publish` | 20,000 | buffered commands; beyond it the broker nacks and the API answers `503` | nothing already accepted is dropped |
 | Consumer concurrency | 4 | registrations being processed at the same time | the number of connections they can get |
 | Prefetch | 8 per consumer | delivered-but-unacknowledged messages per consumer | processing parallelism |
@@ -87,7 +100,7 @@ library between the services (the event JSON is the contract), and no interface/
 
 Virtual threads are an execution mechanism, not a bound: they make waiting (for a confirmation, a
 connection, a lock) cheap, so the limits above can be set by intent instead of by thread exhaustion.
-Experiments A/B/C (1/4/16 consumers with a pool of 4) show the difference between adding workers and
+Experiments A/B/C set both consumer and processing limits to 1/4/16 with a pool of 4, showing the difference between adding workers and
 adding capacity: sixteen consumers on four connections mostly wait, which the Hikari `pending` series
 makes visible.
 
@@ -122,10 +135,9 @@ makes visible.
 
 ## Alternatives that were considered
 
-- **Synchronous `201 Created`** (the design's documented alternative): call the registration service
-  directly from the request, commit user + outbox, return `201`. Simpler contract, but the burst then
-  hits the database with HTTP concurrency instead of a bounded consumer count. The asynchronous `202`
-  was chosen because the case is about absorbing a burst with explicit bounds.
+- **Synchronous `201 Created`**: now available as `/registrations/sync` for comparison. A shared
+  processing gate and bounded HTTP admission protect the database; excess synchronous demand is
+  rejected instead of stored durably. The original async route still demonstrates burst buffering.
 - **JPA instead of JdbcTemplate**: less code for a larger domain model, but hidden SQL and extra
   caching behaviour in a throughput demonstration; two tables and five queries do not justify it.
 - **An application Kafka producer or a polling outbox publisher** instead of Debezium: simpler to run,

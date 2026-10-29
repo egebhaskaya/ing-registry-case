@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.Locale;
 import org.springframework.stereotype.Service;
 
 /**
@@ -36,8 +37,8 @@ public class RegistrationNormalizer {
      */
     public RegistrationPayload normalize(RegistrationRequest request) {
         String fullName = request.fullName().trim().replaceAll("\\s+", " ");
-        String email = request.email().trim().toLowerCase();
-        String countryCode = request.countryCode().trim().toUpperCase();
+        String email = request.email().trim().toLowerCase(Locale.ROOT);
+        String countryCode = request.countryCode().trim().toUpperCase(Locale.ROOT);
         return new RegistrationPayload(fullName, email, countryCode);
     }
 

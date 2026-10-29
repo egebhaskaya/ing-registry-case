@@ -29,6 +29,9 @@ java -jar user_registry/target/user_registry-0.0.1-SNAPSHOT.jar
 
 Open Grafana: <http://localhost:3000/d/registration-case> (no login needed locally). Open the RabbitMQ
 UI: <http://localhost:15672> (guest / guest). Check the connector: `curl -s localhost:8083/connectors/registry-outbox/status`.
+Grafana is the monitoring interface; Prometheus stays behind it. Select the Registry target at the
+top: 8080 for the main service, or 8082 while the separate synchronous comparison is running.
+Finish `make verify` before load experiments and leave both services running throughout each run.
 
 ## 1. Acceptance is not completion
 
@@ -50,8 +53,25 @@ MSYS_NO_PATHCONV=1 docker compose -f infra/compose.yml exec postgres psql -U com
   -c "SELECT registration_id, decision, reason FROM compliance_results WHERE registration_id='11111111-1111-1111-1111-111111111111'"
 ```
 
-Dashboard panel 1 shows three counters rising one after another: accepted, committed, compliance.
+The pipeline progress graph shows acceptance, Registry commits, and Compliance commits.
 Send the same request again: `202` again, Registry log line `outcome=DUPLICATE_IGNORED`, no new rows.
+
+## 1a. Commit during the HTTP request
+
+```bash
+curl -i -X POST localhost:8080/registrations/sync -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 22222222-2222-4222-8222-222222222222' \
+  -d '{"fullName":"Grace Hopper","email":"sync-demo@example.com","countryCode":"US"}'
+```
+
+The first call returns `201` with the stored user after user + outbox commit. Repeat the exact call
+for `200` and the same user; change the body under that key for `409`. Compliance still runs later.
+Watch synchronous outcomes separately from `202` receipts, and compare successful HTTP latency with
+overall latency (fast overload responses can otherwise hide slow successful responses).
+
+For bounded synchronous parallelism, leave the main Registry idle, select target 8082 in Grafana,
+and run the [1/4/16 comparison](synchronous-registration.md#reproducible-comparison). The pool remains
+four; watch processing active, HTTP waiters and Hikari pending. Return to target 8080 afterward.
 
 ## 2. Experiment A: one consumer
 
@@ -62,8 +82,8 @@ requested consumer count and stops it afterwards.
 load-tests/experiment.sh A 1
 ```
 
-Point at: panel 3 (ready messages pile up and drain slowly), panel 2 (committed/s flat at what one
-consumer can do), panel 4 (active connections 1 of 4), panel 5 (registration completion p95 grows with
+Point at: RabbitMQ work (ready messages pile up and drain slowly), throughput (committed/s flat at what one
+consumer can do), Hikari pool (active connections 1 of 4), and completion latency (registration p95 grows with
 queue waiting while HTTP p95 stays flat). The script appends the numbers to `docs/benchmark-results.md`.
 
 ## 3. Experiment B: four consumers
@@ -80,7 +100,7 @@ Point at: committed/s up, drain time down, active connections up to 4, no pendin
 load-tests/experiment.sh C 16
 ```
 
-Point at: panel 4 `pending` above zero (twelve consumers waiting for four connections), committed/s
+Point at: the Registry database pool's `pending` above zero (workers waiting for four connections), committed/s
 about the same as B. Explain the measured result instead of assuming more workers are faster.
 
 ## 5. Compliance outage and catch-up
@@ -95,8 +115,8 @@ MSYS_NO_PATHCONV=1 docker compose -f infra/compose.yml exec kafka /opt/kafka/bin
 ```
 
 Lag per partition grows; Registry keeps committing. Start Compliance again; lag returns to 0 and
-`compliance_results` catches up. The dashboard's Kafka lag panel explains why lag is read from the
-CLI and not from a consumer metric.
+`compliance_results` catches up. The dashboard's interpretation note explains why committed-offset
+lag is read from the CLI and not from a consumer fetch metric.
 
 ## 6. Redelivery is harmless
 
@@ -107,7 +127,7 @@ MSYS_NO_PATHCONV=1 docker compose -f infra/compose.yml exec kafka /opt/kafka/bin
   --bootstrap-server localhost:9092 --group compliance --topic outbox.event.user --reset-offsets --to-earliest --execute
 ```
 
-Point at: Compliance logs `compliance duplicate ignored` for every record, panel 6 shows the
+Point at: Compliance logs `compliance duplicate ignored` for every record, the Compliance recovery graph shows the
 "compliance duplicate ignored" rate, and the row counts do not change:
 
 ```bash
@@ -127,7 +147,7 @@ curl -s -X POST localhost:8080/registrations -H 'Content-Type: application/json'
 
 Point at: still `202` (the API only promises queuing), Registry log `registration rejected permanently`,
 one message in `registration.commands.dlq` in the RabbitMQ UI with headers `x-exception-message`,
-`x-exception-stacktrace`, `x-original-exchange` and `x-original-routingKey`, panel 6 "registry
+`x-exception-stacktrace`, `x-original-exchange` and `x-original-routingKey`, and the Registry recovery graph's "registry
 dead-lettered". Note that the conflict took one attempt and no retries. Delete the DLQ message from the
 UI afterwards if you want a clean queue.
 

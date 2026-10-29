@@ -1,19 +1,14 @@
 package com.example.registry.listeners;
 
-import com.example.registry.config.RegistryMetrics;
 import com.example.registry.exceptions.ConflictingPayloadException;
 import com.example.registry.exceptions.EmailAlreadyRegisteredException;
 import com.example.registry.messaging.RegisterUserCommand;
 import com.example.registry.services.RegistrationOutcome;
-import com.example.registry.services.RegistrationService;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.Locale;
+import com.example.registry.services.RegistrationProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 
 /**
@@ -45,45 +40,24 @@ public class RegistrationCommandListener {
 
     private static final Logger log = LoggerFactory.getLogger(RegistrationCommandListener.class);
 
-    private final RegistrationService registrationService;
-    private final RegistryMetrics metrics;
+    private final RegistrationProcessor processor;
 
-    public RegistrationCommandListener(RegistrationService registrationService, RegistryMetrics metrics) {
-        this.registrationService = registrationService;
-        this.metrics = metrics;
+    public RegistrationCommandListener(RegistrationProcessor processor) {
+        this.processor = processor;
     }
 
     @RabbitListener(queues = "${registry.rabbit.queue}")
     public void onRegisterUser(RegisterUserCommand command) {
         RegistrationOutcome outcome;
         try {
-            outcome = registerOrResolve(command);
+            outcome = processor.processConsumer(command).outcome();
         } catch (ConflictingPayloadException | EmailAlreadyRegisteredException e) {
             // Permanent business conflict: retrying can never succeed, so send it straight to the DLQ.
-            metrics.registration("conflict");
             log.warn("registration rejected permanently registrationId={} reason={}",
                     command.registrationId(), e.getMessage());
             throw new AmqpRejectAndDontRequeueException(e.getMessage(), e);
-        } catch (RuntimeException e) {
-            // Anything else is treated as transient: counted, then handed to the retry machinery.
-            metrics.registrationFailed();
-            throw e;
         }
 
-        metrics.registration(outcome.name().toLowerCase(Locale.ROOT));
-        if (outcome == RegistrationOutcome.CREATED) {
-            metrics.completion(Duration.between(command.submittedAt(), Instant.now()));
-        }
         log.info("registration processed registrationId={} outcome={}", command.registrationId(), outcome);
-    }
-
-    private RegistrationOutcome registerOrResolve(RegisterUserCommand command) {
-        try {
-            return registrationService.register(command);
-        } catch (DuplicateKeyException e) {
-            // A unique constraint fired, which means two deliveries raced or the email already exists.
-            // That transaction is already rolled back; classify the situation in a fresh one.
-            return registrationService.resolveDuplicate(command);
-        }
     }
 }

@@ -65,18 +65,18 @@ class RegistrationRetryTest extends AbstractIntegrationTest {
         doThrow(new TransientDataAccessResourceException("db hiccup"))
                 .doThrow(new TransientDataAccessResourceException("db hiccup"))
                 .doCallRealMethod()
-                .when(registrationService).register(any());
+                .when(registrationService).registerWithResult(any());
 
         post(UUID.randomUUID(), "Ada Lovelace", "retry-" + UUID.randomUUID() + "@example.com");
 
         await().atMost(Duration.ofSeconds(15)).until(() -> users.count() == 1);
         assertThat(rabbitTemplate.receive(props.deadLetterQueue(), 500)).isNull();
-        verify(registrationService, times(3)).register(any());
+        verify(registrationService, times(3)).registerWithResult(any());
     }
 
     @Test
     void exhaustedRetriesEndInDlqWithReason() {
-        doThrow(new TransientDataAccessResourceException("db hiccup")).when(registrationService).register(any());
+        doThrow(new TransientDataAccessResourceException("db hiccup")).when(registrationService).registerWithResult(any());
 
         post(UUID.randomUUID(), "Ada Lovelace", "exhausted-" + UUID.randomUUID() + "@example.com");
 
@@ -93,14 +93,14 @@ class RegistrationRetryTest extends AbstractIntegrationTest {
                 .containsEntry("x-original-routingKey", props.routingKey());
         assertThat(users.count()).isZero();
         // initial attempt + max-retries (3)
-        verify(registrationService, times(4)).register(any());
+        verify(registrationService, times(4)).registerWithResult(any());
     }
 
     @Test
     void permanentConflictIsNotRetried() {
         // Review focus 4: a conflict can never succeed on retry, so it must take
         // exactly one attempt.
-        doCallRealMethod().when(registrationService).register(any());
+        doCallRealMethod().when(registrationService).registerWithResult(any());
         UUID key = UUID.randomUUID();
         String email = "conflict-" + key + "@example.com";
         post(key, "Ada Lovelace", email);
@@ -114,7 +114,7 @@ class RegistrationRetryTest extends AbstractIntegrationTest {
         assertThat(reason).contains("different payload");
         assertThat(users.count()).isEqualTo(1);
         // one real creation + one conflicting attempt, no retries of the conflict
-        verify(registrationService, times(2)).register(any());
+        verify(registrationService, times(2)).registerWithResult(any());
     }
 
     private void post(UUID key, String fullName, String email) {

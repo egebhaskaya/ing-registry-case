@@ -1,192 +1,1526 @@
 {
   "uid": "registration-case",
   "title": "Registration Case",
-  "description": "Burst processing demonstration (docs/design.md section 8). Scrape 5s, refresh 5s. Throughput panels use 30s rate windows, latency panels 1m. Application counters are process counters and reset on restart; the database counts are the ledger.",
-  "tags": ["registration-case"],
+  "description": "Registration case: compare publisher-confirmed 202 intake with synchronous 201 commits and 200 replays. Select one Registry target (8080 regular, 8082 benchmark). Shared services remain global. Scrape/refresh 5s; rates 30s; latency/recovery 1m. Counters reset on restart; database counts are authoritative.",
+  "tags": [
+    "registration-case"
+  ],
   "timezone": "browser",
   "editable": true,
   "graphTooltip": 1,
   "refresh": "5s",
   "schemaVersion": 39,
-  "version": 1,
-  "time": { "from": "now-15m", "to": "now" },
-  "templating": { "list": [] },
-  "annotations": { "list": [] },
+  "version": 3,
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "registry_instance",
+        "label": "Registry target",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "definition": "label_values(up{job=~\"registry|registry-benchmark\"}, instance)",
+        "query": {
+          "query": "label_values(up{job=~\"registry|registry-benchmark\"}, instance)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "regex": "",
+        "multi": false,
+        "includeAll": false,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": "host.docker.internal:8080",
+          "value": "host.docker.internal:8080"
+        },
+        "options": []
+      }
+    ]
+  },
+  "annotations": {
+    "list": []
+  },
   "panels": [
     {
-      "id": 1, "type": "row", "title": "Context: configured limits and runtime",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "panels": []
+      "id": 1,
+      "type": "row",
+      "title": "At a glance · selected Registry and shared services",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
     },
     {
-      "id": 2, "type": "stat", "title": "Registry consumers",
-      "description": "spring.rabbitmq.listener.simple.concurrency: messages processed at the same time. Experiments A/B/C: 1/4/16.",
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [ { "refId": "A", "expr": "registry_config_consumers{application=\"registry-service\"}", "instant": true } ],
-      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
-    },
-    {
-      "id": 3, "type": "stat", "title": "Prefetch per consumer",
-      "description": "Unacknowledged deliveries a consumer may hold. Bounds delivered work, not parallelism.",
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [ { "refId": "A", "expr": "registry_config_prefetch{application=\"registry-service\"}", "instant": true } ],
-      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
-    },
-    {
-      "id": 4, "type": "stat", "title": "Hikari pool max (Registry)",
-      "description": "Maximum database connections of the Registry instance. The real write bound.",
-      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [ { "refId": "A", "expr": "hikaricp_connections_max{application=\"registry-service\"}", "instant": true } ],
-      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
-    },
-    {
-      "id": 5, "type": "stat", "title": "Virtual threads (Registry)",
-      "description": "spring.threads.virtual.enabled as configured. The integration test VirtualThreadVerificationTest proves HTTP and Rabbit handlers actually run on virtual threads.",
-      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [ { "refId": "A", "expr": "registry_threads_virtual_enabled{application=\"registry-service\"}", "instant": true } ],
-      "fieldConfig": { "defaults": { "noValue": "no data", "mappings": [ { "type": "value", "options": { "0": { "text": "off (platform)" }, "1": { "text": "on" } } } ] }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
-    },
-    {
-      "id": 6, "type": "stat", "title": "Java runtime (Registry)",
-      "description": "From jvm_info. Experiments hold Java 25 constant.",
-      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [ { "refId": "A", "expr": "jvm_info{application=\"registry-service\"}", "instant": true, "legendFormat": "{{version}}" } ],
-      "fieldConfig": { "defaults": { "noValue": "no data" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "name", "colorMode": "none", "graphMode": "none" }
-    },
-    {
-      "id": 7, "type": "stat", "title": "Compliance consumers",
-      "description": "spring.kafka.listener.concurrency. At most 4 are useful on a 4-partition topic.",
-      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [ { "refId": "A", "expr": "compliance_config_concurrency{application=\"compliance-service\"}", "instant": true } ],
-      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
-    },
-
-    {
-      "id": 10, "type": "timeseries", "title": "1. Observed progress (cumulative, since process start)",
-      "description": "Acceptance and completion are different stages. accepted = 202 receipts; committed = user + outbox rows committed; compliance = results committed. Process counters: they reset when a service restarts. The database counts are the authoritative totals.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 100,
+      "type": "stat",
+      "title": "Scrape availability",
+      "description": "Prometheus can scrape these endpoints. This is telemetry availability, not proof that a business transaction will succeed. Registry follows the selected target; Compliance and RabbitMQ are shared by both Registry targets.",
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(registry_intake_requests_total{outcome=\"accepted\"})", "legendFormat": "accepted (202)" },
-        { "refId": "B", "expr": "sum(registry_registrations_total{outcome=\"created\"})", "legendFormat": "registrations committed" },
-        { "refId": "C", "expr": "sum(compliance_events_total{outcome=\"processed\"})", "legendFormat": "compliance results committed" }
+        {
+          "refId": "A",
+          "expr": "min(up{job=~\"registry|registry-benchmark\",instance=\"$registry_instance\"})",
+          "legendFormat": "Registry",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "min(up{job=\"compliance\"})",
+          "legendFormat": "Compliance",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "min(up{job=\"rabbitmq\"})",
+          "legendFormat": "RabbitMQ",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
     {
-      "id": 11, "type": "timeseries", "title": "2. Throughput per second (30s rate window)",
-      "description": "Where processing slows and how stages catch up. Rates over 30s windows; a short burst can be smoothed.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 101,
+      "type": "stat",
+      "title": "Execution limit",
+      "description": "Shared registration permits before starting a transaction. Both synchronous HTTP and Rabbit consumers use this per-instance limit.",
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(registry_intake_requests_total{outcome=\"accepted\"}[30s]))", "legendFormat": "accepted/s" },
-        { "refId": "B", "expr": "sum(rate(registry_registrations_total{outcome=\"created\"}[30s]))", "legendFormat": "registrations committed/s" },
-        { "refId": "C", "expr": "sum(rate(compliance_events_total{outcome=\"processed\"}[30s]))", "legendFormat": "compliance results/s" }
+        {
+          "refId": "A",
+          "expr": "registry_config_processing_concurrency{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "permits",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
     {
-      "id": 12, "type": "timeseries", "title": "3. RabbitMQ work (registration.commands)",
-      "description": "ready = buffered, waiting for a consumer; unacked = delivered, not yet acknowledged (includes prefetched messages, so it is not the number being processed); dlq = permanent failures. ready 0 while unacked > 0 is not drained yet.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 4,
+      "type": "stat",
+      "title": "DB connections max",
+      "description": "Configured maximum Hikari connections for the selected Registry. More execution permits do not add connections.",
+      "gridPos": {
+        "x": 9,
+        "y": 1,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "rabbitmq_queue_messages_ready{queue=\"registration.commands\"}", "legendFormat": "ready" },
-        { "refId": "B", "expr": "rabbitmq_queue_messages_unacked{queue=\"registration.commands\"}", "legendFormat": "unacknowledged" },
-        { "refId": "C", "expr": "rabbitmq_queue_messages_ready{queue=\"registration.commands.dlq\"}", "legendFormat": "dead-letter queue depth" }
+        {
+          "refId": "A",
+          "expr": "hikaricp_connections_max{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "connections",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
     {
-      "id": 13, "type": "timeseries", "title": "4. Registry database pool (HikariCP)",
-      "description": "pending = threads waiting for a connection. Extra consumers beyond the pool size wait here. Pending is not proof of database CPU saturation. timeouts = acquisitions that gave up (per minute).",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 2,
+      "type": "stat",
+      "title": "Rabbit listener config",
+      "description": "Configured consumers and prefetch. These are not a running-consumer count: benchmark instances disable listeners. Prefetch counts delivered messages, not parallel transactions.",
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "hikaricp_connections_active{application=\"registry-service\"}", "legendFormat": "active" },
-        { "refId": "B", "expr": "hikaricp_connections_pending{application=\"registry-service\"}", "legendFormat": "pending (waiting)" },
-        { "refId": "C", "expr": "hikaricp_connections_max{application=\"registry-service\"}", "legendFormat": "max" },
-        { "refId": "D", "expr": "increase(hikaricp_connections_timeout_total{application=\"registry-service\"}[1m])", "legendFormat": "acquisition timeouts / 1m" }
+        {
+          "refId": "A",
+          "expr": "registry_config_consumers{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "consumers",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "registry_config_prefetch{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "prefetch",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [ { "matcher": { "id": "byName", "options": "max" }, "properties": [ { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } } ] } ] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
     {
-      "id": 14, "type": "timeseries", "title": "5. Latency p95 (1m windows, from histogram buckets)",
-      "description": "HTTP 202 = time to a confirmed receipt. registration = submittedAt to user+outbox commit (includes queue waiting). compliance = submittedAt to compliance result commit (includes CDC and Kafka). Computed with histogram_quantile from buckets, never from averages.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 7,
+      "type": "stat",
+      "title": "Compliance consumers",
+      "description": "Configured Kafka listener concurrency. At most four consumers are useful for the four event partitions.",
+      "gridPos": {
+        "x": 15,
+        "y": 1,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{application=\"registry-service\",uri=\"/registrations\",status=\"202\"}[1m])) by (le))", "legendFormat": "HTTP 202 p95" },
-        { "refId": "B", "expr": "histogram_quantile(0.95, sum(rate(registry_registration_completion_seconds_bucket[1m])) by (le))", "legendFormat": "registration completion p95" },
-        { "refId": "C", "expr": "histogram_quantile(0.95, sum(rate(compliance_completion_seconds_bucket[1m])) by (le))", "legendFormat": "compliance completion p95" }
+        {
+          "refId": "A",
+          "expr": "compliance_config_concurrency{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}",
+          "legendFormat": "consumers",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
     {
-      "id": 15, "type": "timeseries", "title": "6. Errors and recovery (per second, 1m window)",
-      "description": "Controlled overload (503 reasons), consumer attempts that failed (retried with backoff), dead-lettered commands and events, and deduplicated redeliveries. No data means nothing happened, not zero.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 5,
+      "type": "stat",
+      "title": "Virtual threads",
+      "description": "Configured thread mode. The integration test checks actual HTTP and Rabbit handler threads. Virtual threads do not increase the database connection budget.",
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (outcome) (rate(registry_intake_requests_total{outcome!=\"accepted\"}[1m]))", "legendFormat": "intake 503 {{outcome}}" },
-        { "refId": "B", "expr": "sum(rate(registry_registrations_failures_total[1m]))", "legendFormat": "registry attempt failed (retried)" },
-        { "refId": "C", "expr": "sum(rate(registry_registrations_dead_lettered_total[1m]))", "legendFormat": "registry dead-lettered" },
-        { "refId": "D", "expr": "sum(rate(registry_registrations_total{outcome=\"duplicate_ignored\"}[1m]))", "legendFormat": "registry duplicate ignored" },
-        { "refId": "E", "expr": "sum(rate(compliance_events_total{outcome=\"duplicate_ignored\"}[1m]))", "legendFormat": "compliance duplicate ignored" },
-        { "refId": "F", "expr": "sum(rate(compliance_events_dead_lettered_total[1m]))", "legendFormat": "compliance dead-lettered" }
+        {
+          "refId": "A",
+          "expr": "registry_threads_virtual_enabled{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "mode",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "off"
+                },
+                "1": {
+                  "text": "on"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value",
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
-
     {
-      "id": 20, "type": "row", "title": "Diagnostics (threading-mode comparison)",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 }, "collapsed": false, "panels": []
-    },
-    {
-      "id": 21, "type": "timeseries", "title": "JVM live platform threads",
-      "description": "jvm_threads_live_threads counts platform threads only; virtual threads are not JVM-visible threads. Compare experiment B (virtual) with D (platform).",
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 30 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 6,
+      "type": "stat",
+      "title": "Java runtime",
+      "description": "Java version reported by the selected Registry JVM. Keep this constant when comparing parallelism.",
+      "gridPos": {
+        "x": 21,
+        "y": 1,
+        "w": 3,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "jvm_threads_live_threads{application=\"registry-service\"}", "legendFormat": "registry" },
-        { "refId": "B", "expr": "jvm_threads_live_threads{application=\"compliance-service\"}", "legendFormat": "compliance" }
+        {
+          "refId": "A",
+          "expr": "jvm_info{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "{{version}}",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "noValue": "no data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "name",
+        "colorMode": "none",
+        "graphMode": "none",
+        "orientation": "auto"
+      }
     },
     {
-      "id": 22, "type": "timeseries", "title": "JVM heap used",
-      "description": "Sum of jvm_memory_used_bytes over heap areas per service.",
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 30 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "id": 102,
+      "type": "row",
+      "title": "Requests · accepted work versus committed registrations",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 103,
+      "type": "timeseries",
+      "title": "Synchronous HTTP outcomes /s",
+      "description": "POST /registrations/sync. 201 = new Registry commit, 200 = same-key replay, 409 = conflict, 503 = refused capacity. Input errors and other server errors are shown separately. Each series appears after that status has been observed; 30s rates smooth brief bursts.",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(jvm_memory_used_bytes{application=\"registry-service\",area=\"heap\"})", "legendFormat": "registry heap" },
-        { "refId": "B", "expr": "sum(jvm_memory_used_bytes{application=\"compliance-service\",area=\"heap\"})", "legendFormat": "compliance heap" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=\"201\"}[30s]))",
+          "legendFormat": "201 created",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=\"200\"}[30s]))",
+          "legendFormat": "200 replayed",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=\"409\"}[30s]))",
+          "legendFormat": "409 conflict",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=\"503\"}[30s]))",
+          "legendFormat": "503 overloaded",
+          "instant": false
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=\"400\"}[30s]))",
+          "legendFormat": "400 invalid input",
+          "instant": false
+        },
+        {
+          "refId": "F",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=~\"5..\",status!=\"503\"}[30s]))",
+          "legendFormat": "other 5xx",
+          "instant": false
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false, "lineWidth": 2 } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
     },
     {
-      "id": 23, "type": "text", "title": "Kafka consumer-group lag: not shown on purpose",
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 37 },
-      "options": { "mode": "markdown", "content": "Committed consumer-group lag needs a dedicated exporter or Admin-based collector (design section 8). The consumer's own `records-lag-max` is **not** a substitute: it describes the live consumer position and disappears when Compliance is stopped, which is exactly the moment lag matters. Until such a source is configured, inspect lag with:\n\n`docker compose -f infra/compose.yml exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group compliance`" }
+      "id": 104,
+      "type": "timeseries",
+      "title": "Queued intake decisions /s",
+      "description": "POST /registrations returns 202 after confirmed routing to RabbitMQ; it does not promise a user commit. Other intake outcomes are 503 reasons, including an unknown confirmation outcome that must be retried with the same key.",
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(registry_intake_requests_total{application=\"registry-service\",instance=\"$registry_instance\"}[30s]))",
+          "legendFormat": "{{outcome}}",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Observed progress · process counters",
+      "description": "Accepted = async 202 receipts. Sync created = successful synchronous creations. Registry committed includes both routes, while Compliance is a shared service and can include work from other Registry targets. Counters reset on restart and are not a common cohort or a database ledger. No subtraction is used to infer backlog.",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(registry_intake_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"accepted\"})",
+          "legendFormat": "async accepted (202)",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(registry_sync_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"created\"})",
+          "legendFormat": "sync created (201)",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(registry_registrations_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"created\"})",
+          "legendFormat": "Registry committed · both routes",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "sum(compliance_events_total{application=\"compliance-service\",instance=\"host.docker.internal:8081\",outcome=\"processed\"})",
+          "legendFormat": "Compliance results · shared service",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Stage throughput /s",
+      "description": "30s rates of real milestones. Queue acceptance and Registry commit have different boundaries. Compliance is shared across Registry targets. Use successful commit throughput together with rejection counts and latency.",
+      "gridPos": {
+        "x": 12,
+        "y": 15,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(registry_intake_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"accepted\"}[30s]))",
+          "legendFormat": "async accepted/s",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(registry_sync_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"created\"}[30s]))",
+          "legendFormat": "sync created/s",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(registry_registrations_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"created\"}[30s]))",
+          "legendFormat": "Registry committed/s · both routes",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(compliance_events_total{application=\"compliance-service\",instance=\"host.docker.internal:8081\",outcome=\"processed\"}[30s]))",
+          "legendFormat": "Compliance results/s",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 105,
+      "type": "timeseries",
+      "title": "HTTP p95 · successful responses versus all responses",
+      "description": "Histogram p95 over 1m windows. Sync success includes 201 and 200; async success is 202. All-response latency also includes potentially fast rejections, so it can look better while successful registrations are slow. 200ms admission waiting is not a whole-request deadline.",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\",status=~\"200|201\"}[1m])))",
+          "legendFormat": "sync 201/200 p95 · committed",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations/sync\",method=\"POST\"}[1m])))",
+          "legendFormat": "sync all responses p95",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations\",method=\"POST\",status=\"202\"}[1m])))",
+          "legendFormat": "async 202 p95 · accepted",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{application=\"registry-service\",instance=\"$registry_instance\",uri=\"/registrations\",method=\"POST\"}[1m])))",
+          "legendFormat": "async all responses p95",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 106,
+      "type": "row",
+      "title": "Capacity · HTTP waiting and the database connection budget",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 107,
+      "type": "timeseries",
+      "title": "Shared execution and HTTP waiting",
+      "description": "Active executions hold a processing permit through commit and duplicate resolution; they can include executions waiting for a database connection. HTTP waiters are outside those executions and have a bounded count and admission wait. Rabbit waits for permits without rejecting already accepted commands.",
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "registry_processing_active{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "executions holding permits",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "registry_processing_waiting_requests{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "HTTP requests waiting for permits",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "registry_config_processing_concurrency{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "execution limit",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "execution limit"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Registry database pool",
+      "description": "Active = checked-out connections; pending = executions waiting for a connection; idle = reusable connections. Pending is connection contention, not proof of database CPU saturation. With 16 execution permits and a pool of four, up to twelve permitted executions can wait here.",
+      "gridPos": {
+        "x": 12,
+        "y": 31,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "hikaricp_connections_active{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "active connections",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "hikaricp_connections_pending{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "pending for connection",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "hikaricp_connections_idle{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "idle connections",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "hikaricp_connections_max{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "pool maximum",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 108,
+      "type": "timeseries",
+      "title": "Connection acquisition · mean and recent max",
+      "description": "Hikari acquisition is exported as count, sum and recent max, not histogram buckets. Mean is rate(sum) / rate(count) over 1m; the recent timer max has the exporter retention window. Neither is p95. Idle windows without acquisitions have no mean observation.",
+      "gridPos": {
+        "x": 0,
+        "y": 39,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(hikaricp_connections_acquire_seconds_sum{application=\"registry-service\",instance=\"$registry_instance\"}[1m])) / sum(rate(hikaricp_connections_acquire_seconds_count{application=\"registry-service\",instance=\"$registry_instance\"}[1m]))",
+          "legendFormat": "Registry acquisition mean · 1m",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "max(hikaricp_connections_acquire_seconds_max{application=\"registry-service\",instance=\"$registry_instance\"})",
+          "legendFormat": "Registry acquisition recent max",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(hikaricp_connections_acquire_seconds_sum{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}[1m])) / sum(rate(hikaricp_connections_acquire_seconds_count{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}[1m]))",
+          "legendFormat": "Compliance acquisition mean · 1m",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 109,
+      "type": "timeseries",
+      "title": "Capacity refusals and DB acquisition timeouts /1m",
+      "description": "HTTP admission refusals happen before a synchronous database transaction or an async publish starts. Hikari acquisition timeouts are a different failure after an execution has entered processing. These are extrapolated 1m counter increases, not an exact request ledger.",
+      "gridPos": {
+        "x": 12,
+        "y": 39,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(registry_sync_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"overloaded\"}[1m]))",
+          "legendFormat": "sync HTTP admission refused",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(registry_intake_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"overloaded\"}[1m]))",
+          "legendFormat": "async publish admission refused",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(increase(hikaricp_connections_timeout_total{application=\"registry-service\",instance=\"$registry_instance\"}[1m]))",
+          "legendFormat": "Registry DB acquisition timed out",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 110,
+      "type": "row",
+      "title": "Delivery · backlog, completion and recovery",
+      "gridPos": {
+        "x": 0,
+        "y": 47,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "RabbitMQ registration work",
+      "description": "Shared command queue. Ready = waiting for delivery. Unacknowledged includes prefetched messages and is not execution parallelism. DLQ depth is pending failed commands. Ready zero while unacknowledged remains is not fully drained. Queue capacity applies to ready messages.",
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands\"})",
+          "legendFormat": "ready",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rabbitmq_queue_messages_unacked{job=\"rabbitmq\",queue=\"registration.commands\"})",
+          "legendFormat": "unacknowledged",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands.dlq\"})",
+          "legendFormat": "dead-letter queue depth",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Completion p95 · Registry and Compliance",
+      "description": "Real histogram p95 over 1m windows. Registry: submission to user + outbox commit, including Rabbit or HTTP admission waiting, for newly created registrations. Compliance: submission through CDC/Kafka to its result commit. Compliance is shared, so the lines are not a cohort-specific lag calculation.",
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(registry_registration_completion_seconds_bucket{application=\"registry-service\",instance=\"$registry_instance\"}[1m])))",
+          "legendFormat": "Registry completion p95 · both routes",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(compliance_completion_seconds_bucket{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}[1m])))",
+          "legendFormat": "Compliance completion p95 · shared service",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Registry conflicts, replay and recovery /s",
+      "description": "Failed processing attempts include consumer attempts that may be retried and synchronous failures; this is not an exact retry count. Dead-lettered counts recovered publications, not current DLQ depth. Duplicate processing is harmless and creates no second user/outbox event.",
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(registry_registrations_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"conflict\"}[1m]))",
+          "legendFormat": "processing conflict",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(registry_registrations_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"duplicate_ignored\"}[1m]))",
+          "legendFormat": "duplicate ignored · both routes",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(registry_registrations_failures_total{application=\"registry-service\",instance=\"$registry_instance\"}[1m]))",
+          "legendFormat": "processing attempt failed",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(registry_registrations_dead_lettered_total{application=\"registry-service\",instance=\"$registry_instance\"}[1m]))",
+          "legendFormat": "command dead-lettered",
+          "instant": false
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(registry_sync_requests_total{application=\"registry-service\",instance=\"$registry_instance\",outcome=\"replayed\"}[1m]))",
+          "legendFormat": "sync replay returned (200)",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 111,
+      "type": "timeseries",
+      "title": "Compliance replay, failures and recovery /s",
+      "description": "Duplicate events are ignored. Dead-lettered counts events published to the DLT; it is not DLT depth. Failed framework listener invocations can include attempts later retried; no dedicated exact retry counter is collected. Metrics appear after outcomes have been observed.",
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(compliance_events_total{application=\"compliance-service\",instance=\"host.docker.internal:8081\",outcome=\"duplicate_ignored\"}[1m]))",
+          "legendFormat": "duplicate event ignored",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(compliance_events_dead_lettered_total{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}[1m]))",
+          "legendFormat": "event published to DLT",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(spring_kafka_listener_seconds_count{application=\"compliance-service\",instance=\"host.docker.internal:8081\",result!=\"success\"}[1m]))",
+          "legendFormat": "failed listener invocation",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Runtime · resource context for the comparison",
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Live platform threads",
+      "description": "The JVM live-thread gauge counts platform threads, not virtual threads. Compare thread modes at the same load and resource limits. It is not a count of active registrations.",
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jvm_threads_live_threads{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "Registry platform threads",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "jvm_threads_live_threads{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}",
+          "legendFormat": "Compliance platform threads",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "JVM heap used",
+      "description": "Sum of heap-area memory used per JVM. The selected Registry target and shared Compliance process are shown separately.",
+      "gridPos": {
+        "x": 8,
+        "y": 65,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(jvm_memory_used_bytes{application=\"registry-service\",instance=\"$registry_instance\",area=\"heap\"})",
+          "legendFormat": "Registry heap",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "sum(jvm_memory_used_bytes{application=\"compliance-service\",instance=\"host.docker.internal:8081\",area=\"heap\"})",
+          "legendFormat": "Compliance heap",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 112,
+      "type": "timeseries",
+      "title": "CPU usage",
+      "description": "JVM process CPU and the selected Registry host CPU gauge. Build/test processes, the load generator and containers on the same machine can affect timings. Keep verification separate from load comparisons.",
+      "gridPos": {
+        "x": 16,
+        "y": 65,
+        "w": 8,
+        "h": 7
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "process_cpu_usage{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "Registry process",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "process_cpu_usage{application=\"compliance-service\",instance=\"host.docker.internal:8081\"}",
+          "legendFormat": "Compliance process",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "system_cpu_usage{application=\"registry-service\",instance=\"$registry_instance\"}",
+          "legendFormat": "host CPU · Registry observation",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "spanNulls": false,
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "text",
+      "title": "How to read this case",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Choose the Registry target:** port 8080 is the regular service; port 8082 is the temporary parallelism experiment. Registry panels follow that one target. RabbitMQ and Compliance are shared, so their totals may also include other Registry instances.\n\n**Acceptance and completion differ.** A 202 is queued work; a 201 confirms a new user + outbox commit; a 200 is an idempotent replay. Process counters reset on restart. Database counts are the authoritative ledger. No-event series can be absent, and histogram p95 has gaps without observations.\n\nScrapes and refresh are every 5s; shorter peaks can be missed. Rates use 30s windows and latency/recovery charts use 1m windows. Committed Kafka consumer-group lag and CDC connector health are not collected here; live-consumer position is not a substitute for committed backlog."
+      }
     }
   ]
 }
