@@ -13,7 +13,11 @@
 #   connect-init registers (or updates) the outbox connector through the Connect REST API
 #
 #   docker compose -f infra/compose.yml up -d --wait
-#   docker compose -f infra/compose.yml --profile init up kafka-init connect-init
+#   docker compose -f infra/compose.yml --profile init up --force-recreate kafka-init connect-init
+#
+# --force-recreate matters: an exited one-shot container keeps a reference to the network it ran on;
+# after the network was recreated (down/up, Docker restart) a plain "up" would try to reuse that
+# container and fail with "network ... not found". Recreating it is cheap and always correct.
 
 name: registration-case
 

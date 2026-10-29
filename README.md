@@ -48,7 +48,7 @@ Check: `make check`, or `java -version` prints `25.x` and `docker info` succeeds
 | Step | Command | Without make |
 |------|---------|--------------|
 | List all commands | `make` | |
-| Start the infrastructure and run the one-shot init containers | `make up` | `docker compose -f infra/compose.yml up -d --wait` then `docker compose -f infra/compose.yml --profile init up kafka-init connect-init` |
+| Start the infrastructure and run the one-shot init containers | `make up` | `docker compose -f infra/compose.yml up -d --wait` then `docker compose -f infra/compose.yml --profile init up --force-recreate kafka-init connect-init` |
 | Build and test both services | `make verify` | `user_registry/mvnw -f user_registry/pom.xml verify` and `compliance/mvnw -f compliance/pom.xml verify` |
 | Run the Registry service (port 8080), terminal 2 | `make registry` | `user_registry/mvnw -f user_registry/pom.xml spring-boot:run` |
 | Run the Compliance service (port 8081), terminal 3 | `make compliance` | `compliance/mvnw -f compliance/pom.xml spring-boot:run` |

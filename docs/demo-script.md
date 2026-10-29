@@ -9,7 +9,7 @@ command below has a `make` shorthand (`make up`, `make registry`, `make complian
 
 ```bash
 docker compose -f infra/compose.yml up -d --wait                                   # make up
-docker compose -f infra/compose.yml --profile init up kafka-init connect-init      # (part of make up)
+docker compose -f infra/compose.yml --profile init up --force-recreate kafka-init connect-init   # (part of make up)
 user_registry/mvnw -f user_registry/pom.xml -DskipTests package                    # make build
 compliance/mvnw -f compliance/pom.xml -DskipTests package
 ```

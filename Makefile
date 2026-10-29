@@ -32,9 +32,9 @@ check: ## Verify Java 25 and Docker are available
 
 # ---- infrastructure --------------------------------------------------------------------------
 
-up: ## Start PostgreSQL, RabbitMQ, Kafka, Debezium (and monitoring, once wired) and run the init containers
+up: ## Start PostgreSQL, RabbitMQ, Kafka, Debezium, Prometheus, Grafana and run the init containers
 	$(COMPOSE) up -d --wait
-	$(COMPOSE) --profile init up kafka-init connect-init
+	$(COMPOSE) --profile init up --force-recreate kafka-init connect-init
 
 down: ## Stop the infrastructure, keep the data volumes
 	$(COMPOSE) down
