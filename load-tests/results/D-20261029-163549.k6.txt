@@ -1,0 +1,9 @@
+k6: run id D-20261029-163549, 10000 iterations, 50 VUs, target http://host.docker.internal:8080
+run id:            D-20261029-163549
+iterations:        10000 (wanted 10000)
+accepted (202):    10000
+rejected (503):    n/a
+other:             n/a
+http p50 / p95 ms: 11.8 / 28.2
+submission took:   2.9 s
+summary: /c/Users/egebh/OneDrive/Belgeler/GitHub/ing-registry-case/load-tests/results/D-20261029-163549.summary.json

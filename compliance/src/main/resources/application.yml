@@ -1,0 +1,67 @@
+# Compliance service configuration. Same conventions as the Registry service; see docs/design.md.
+
+spring:
+  application:
+    name: compliance-service
+
+  threads:
+    virtual:
+      enabled: true                 # design section 6: Kafka listener work runs on virtual threads
+  main:
+    keep-alive: true                # a consumer application must not exit when only daemon threads remain
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/compliance   # its own database, owned by its own role
+    username: compliance
+    password: compliance
+    hikari:
+      maximum-pool-size: 4
+
+  flyway:
+    enabled: true                   # src/main/resources/db/migration/V*.sql
+
+  kafka:
+    bootstrap-servers: localhost:29092          # the EXTERNAL listener of the compose broker
+    consumer:
+      group-id: compliance                      # one consumer group; partitions are shared among its members
+      auto-offset-reset: earliest               # a brand-new group starts from the oldest retained record
+      enable-auto-commit: false                 # the listener container commits offsets, not the client timer
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer   # JSON parsed in the listener
+    producer:                                   # used only by the dead-letter recoverer
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    listener:
+      ack-mode: record                          # design section 5: commit the offset only after each record's transaction
+      concurrency: 1                            # design section 5: one consumer; raise up to the partition count (4)
+
+server:
+  port: 8081                        # Registry uses 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: compliance-service   # every series gets this label; the dashboard filters on it
+    distribution:
+      # Histogram buckets for the end-to-end completion timer (design section 8: p95 from buckets).
+      percentiles-histogram:
+        "[compliance.completion]": true
+      minimum-expected-value:
+        "[compliance.completion]": 10ms
+      maximum-expected-value:
+        "[compliance.completion]": 5m
+
+# Our own settings, bound to com.example.compliance.config.ComplianceProperties.
+compliance:
+  kafka:
+    topic: outbox.event.user        # produced by Debezium's outbox router: "outbox.event." + aggregatetype
+    partitions: 4
+  demo-rule:
+    flagged-countries: XX,ZZ        # ISO 3166 user-assigned codes: demo logic, not real screening

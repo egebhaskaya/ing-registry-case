@@ -1,0 +1,6 @@
+# Optional profile for experiment D (design §6): the same application on classic platform threads.
+# Activate with --spring.profiles.active=platform ; everything else stays identical to application.yml.
+spring:
+  threads:
+    virtual:
+      enabled: false

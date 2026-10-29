@@ -1,0 +1,14 @@
+# Provisioned dashboards: every JSON file in /var/lib/grafana/dashboards (mounted from
+# infra/monitoring/grafana/dashboards) is loaded at start and re-read every 30 seconds.
+apiVersion: 1
+providers:
+  - name: registration-case
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

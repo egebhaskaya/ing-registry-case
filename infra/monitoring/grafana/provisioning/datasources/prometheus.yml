@@ -1,0 +1,13 @@
+# Provisioned data source: Grafana finds Prometheus by its compose service name. The fixed uid is
+# what the dashboard JSON refers to, so nothing has to be clicked together by hand.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 5s

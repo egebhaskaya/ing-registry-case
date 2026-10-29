@@ -1,0 +1,29 @@
+# Local Prometheus for the demonstration (docs/design.md section 8).
+# 5s scrape: short spikes between scrapes can still be missed, which is why k6's own measurements
+# and the end-of-run database counts are kept next to the graphs.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The two applications run on the host (mvnw spring-boot:run or java -jar), not in compose.
+  - job_name: registry
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+
+  - job_name: compliance
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+
+  # RabbitMQ's built-in rabbitmq_prometheus plugin; per-queue series are enabled in
+  # infra/rabbitmq/20-prometheus.conf (return_per_object_metrics = true).
+  - job_name: rabbitmq
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

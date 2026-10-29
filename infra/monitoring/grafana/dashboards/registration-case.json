@@ -1,0 +1,192 @@
+{
+  "uid": "registration-case",
+  "title": "Registration Case",
+  "description": "Burst processing demonstration (docs/design.md section 8). Scrape 5s, refresh 5s. Throughput panels use 30s rate windows, latency panels 1m. Application counters are process counters and reset on restart; the database counts are the ledger.",
+  "tags": ["registration-case"],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1, "type": "row", "title": "Context: configured limits and runtime",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "panels": []
+    },
+    {
+      "id": 2, "type": "stat", "title": "Registry consumers",
+      "description": "spring.rabbitmq.listener.simple.concurrency: messages processed at the same time. Experiments A/B/C: 1/4/16.",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "registry_config_consumers{application=\"registry-service\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Prefetch per consumer",
+      "description": "Unacknowledged deliveries a consumer may hold. Bounds delivered work, not parallelism.",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "registry_config_prefetch{application=\"registry-service\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Hikari pool max (Registry)",
+      "description": "Maximum database connections of the Registry instance. The real write bound.",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "hikaricp_connections_max{application=\"registry-service\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 5, "type": "stat", "title": "Virtual threads (Registry)",
+      "description": "spring.threads.virtual.enabled as configured. The integration test VirtualThreadVerificationTest proves HTTP and Rabbit handlers actually run on virtual threads.",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "registry_threads_virtual_enabled{application=\"registry-service\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "noValue": "no data", "mappings": [ { "type": "value", "options": { "0": { "text": "off (platform)" }, "1": { "text": "on" } } } ] }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 6, "type": "stat", "title": "Java runtime (Registry)",
+      "description": "From jvm_info. Experiments hold Java 25 constant.",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "jvm_info{application=\"registry-service\"}", "instant": true, "legendFormat": "{{version}}" } ],
+      "fieldConfig": { "defaults": { "noValue": "no data" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "name", "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 7, "type": "stat", "title": "Compliance consumers",
+      "description": "spring.kafka.listener.concurrency. At most 4 are useful on a 4-partition topic.",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "compliance_config_concurrency{application=\"compliance-service\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "decimals": 0, "noValue": "no data" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "value", "colorMode": "none", "graphMode": "none" }
+    },
+
+    {
+      "id": 10, "type": "timeseries", "title": "1. Observed progress (cumulative, since process start)",
+      "description": "Acceptance and completion are different stages. accepted = 202 receipts; committed = user + outbox rows committed; compliance = results committed. Process counters: they reset when a service restarts. The database counts are the authoritative totals.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(registry_intake_requests_total{outcome=\"accepted\"})", "legendFormat": "accepted (202)" },
+        { "refId": "B", "expr": "sum(registry_registrations_total{outcome=\"created\"})", "legendFormat": "registrations committed" },
+        { "refId": "C", "expr": "sum(compliance_events_total{outcome=\"processed\"})", "legendFormat": "compliance results committed" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "2. Throughput per second (30s rate window)",
+      "description": "Where processing slows and how stages catch up. Rates over 30s windows; a short burst can be smoothed.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(registry_intake_requests_total{outcome=\"accepted\"}[30s]))", "legendFormat": "accepted/s" },
+        { "refId": "B", "expr": "sum(rate(registry_registrations_total{outcome=\"created\"}[30s]))", "legendFormat": "registrations committed/s" },
+        { "refId": "C", "expr": "sum(rate(compliance_events_total{outcome=\"processed\"}[30s]))", "legendFormat": "compliance results/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "mean"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "3. RabbitMQ work (registration.commands)",
+      "description": "ready = buffered, waiting for a consumer; unacked = delivered, not yet acknowledged (includes prefetched messages, so it is not the number being processed); dlq = permanent failures. ready 0 while unacked > 0 is not drained yet.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rabbitmq_queue_messages_ready{queue=\"registration.commands\"}", "legendFormat": "ready" },
+        { "refId": "B", "expr": "rabbitmq_queue_messages_unacked{queue=\"registration.commands\"}", "legendFormat": "unacknowledged" },
+        { "refId": "C", "expr": "rabbitmq_queue_messages_ready{queue=\"registration.commands.dlq\"}", "legendFormat": "dead-letter queue depth" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 10 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 13, "type": "timeseries", "title": "4. Registry database pool (HikariCP)",
+      "description": "pending = threads waiting for a connection. Extra consumers beyond the pool size wait here. Pending is not proof of database CPU saturation. timeouts = acquisitions that gave up (per minute).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "hikaricp_connections_active{application=\"registry-service\"}", "legendFormat": "active" },
+        { "refId": "B", "expr": "hikaricp_connections_pending{application=\"registry-service\"}", "legendFormat": "pending (waiting)" },
+        { "refId": "C", "expr": "hikaricp_connections_max{application=\"registry-service\"}", "legendFormat": "max" },
+        { "refId": "D", "expr": "increase(hikaricp_connections_timeout_total{application=\"registry-service\"}[1m])", "legendFormat": "acquisition timeouts / 1m" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [ { "matcher": { "id": "byName", "options": "max" }, "properties": [ { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [10, 10] } } ] } ] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 14, "type": "timeseries", "title": "5. Latency p95 (1m windows, from histogram buckets)",
+      "description": "HTTP 202 = time to a confirmed receipt. registration = submittedAt to user+outbox commit (includes queue waiting). compliance = submittedAt to compliance result commit (includes CDC and Kafka). Computed with histogram_quantile from buckets, never from averages.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{application=\"registry-service\",uri=\"/registrations\",status=\"202\"}[1m])) by (le))", "legendFormat": "HTTP 202 p95" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum(rate(registry_registration_completion_seconds_bucket[1m])) by (le))", "legendFormat": "registration completion p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.95, sum(rate(compliance_completion_seconds_bucket[1m])) by (le))", "legendFormat": "compliance completion p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 15, "type": "timeseries", "title": "6. Errors and recovery (per second, 1m window)",
+      "description": "Controlled overload (503 reasons), consumer attempts that failed (retried with backoff), dead-lettered commands and events, and deduplicated redeliveries. No data means nothing happened, not zero.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (outcome) (rate(registry_intake_requests_total{outcome!=\"accepted\"}[1m]))", "legendFormat": "intake 503 {{outcome}}" },
+        { "refId": "B", "expr": "sum(rate(registry_registrations_failures_total[1m]))", "legendFormat": "registry attempt failed (retried)" },
+        { "refId": "C", "expr": "sum(rate(registry_registrations_dead_lettered_total[1m]))", "legendFormat": "registry dead-lettered" },
+        { "refId": "D", "expr": "sum(rate(registry_registrations_total{outcome=\"duplicate_ignored\"}[1m]))", "legendFormat": "registry duplicate ignored" },
+        { "refId": "E", "expr": "sum(rate(compliance_events_total{outcome=\"duplicate_ignored\"}[1m]))", "legendFormat": "compliance duplicate ignored" },
+        { "refId": "F", "expr": "sum(rate(compliance_events_dead_lettered_total[1m]))", "legendFormat": "compliance dead-lettered" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false, "lineWidth": 2, "fillOpacity": 5 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] }, "tooltip": { "mode": "multi" } }
+    },
+
+    {
+      "id": 20, "type": "row", "title": "Diagnostics (threading-mode comparison)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 }, "collapsed": false, "panels": []
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "JVM live platform threads",
+      "description": "jvm_threads_live_threads counts platform threads only; virtual threads are not JVM-visible threads. Compare experiment B (virtual) with D (platform).",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "jvm_threads_live_threads{application=\"registry-service\"}", "legendFormat": "registry" },
+        { "refId": "B", "expr": "jvm_threads_live_threads{application=\"compliance-service\"}", "legendFormat": "compliance" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "custom": { "spanNulls": false, "lineWidth": 2 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 22, "type": "timeseries", "title": "JVM heap used",
+      "description": "Sum of jvm_memory_used_bytes over heap areas per service.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(jvm_memory_used_bytes{application=\"registry-service\",area=\"heap\"})", "legendFormat": "registry heap" },
+        { "refId": "B", "expr": "sum(jvm_memory_used_bytes{application=\"compliance-service\",area=\"heap\"})", "legendFormat": "compliance heap" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "spanNulls": false, "lineWidth": 2 } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max", "lastNotNull"] }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 23, "type": "text", "title": "Kafka consumer-group lag: not shown on purpose",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 37 },
+      "options": { "mode": "markdown", "content": "Committed consumer-group lag needs a dedicated exporter or Admin-based collector (design section 8). The consumer's own `records-lag-max` is **not** a substitute: it describes the live consumer position and disappears when Compliance is stopped, which is exactly the moment lag matters. Until such a source is configured, inspect lag with:\n\n`docker compose -f infra/compose.yml exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group compliance`" }
+    }
+  ]
+}
