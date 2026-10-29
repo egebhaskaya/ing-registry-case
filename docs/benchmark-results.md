@@ -101,3 +101,8 @@ not raise the platform-thread count: each consumer is a virtual thread.
    Kafka, Debezium, Prometheus and Grafana share 12 cores. The first run (A) also carried JVM warm-up
    (visible in its heap peak). Hikari `pending` is sampled every 5 s and can miss shorter waits. k6 is
    closed-loop: 50 virtual users each wait for a reply, so a slower API would lower the send rate.
+| A | A-20261029-170123 | 1 | 4 | 8 | on | 25.0.5 | 10000 | 10000 | 0 | 0 | 2.9 | 11.6 | 29.9 | 93.6 | 108.2 | 85.2 | 94.6 | 85.9 | 0.0 | 0.0 | 10000 / 10000 / 10000 | COMPLETE |
+| A | A-20261029-171243 | 1 | 4 | 8 | on | 25.0.5 | 10000 | 10000 | 0 | 0 | 2.9 | 11.4 | 28.3 | 88.7 | 114.1 | 83.7 | 89.7 | 84.4 | 0.0 | 0.0 | 10000 / 10000 / 10000 | COMPLETE |
+| B | B-20261029-171424 | 4 | 4 | 8 | on | 25.0.5 | 10000 | 10000 | 0 | 0 | 3.0 | 12.2 | 29.8 | 34.7 | 298.6 | 32.5 | 72.7 | 65.6 | 0.0 | 0.0 | 10000 / 10000 / 10000 | COMPLETE |
+| C | C-20261029-171545 | 16 | 4 | 8 | on | 25.0.5 | 10000 | 10000 | 0 | 0 | 3.0 | 12.3 | 28.3 | 16.9 | 633.4 | 12.4 | 55.9 | 50.4 | 12.0 | 0.0 | 10000 / 10000 / 10000 | COMPLETE |
+| D | D-20261029-171706 | 4 | 4 | 8 | off | 25.0.5 | 10000 | 10000 | 0 | 0 | 3.2 | 12.7 | 30.2 | 17.7 | 616.1 | 12.8 | 71.6 | 62.8 | 0.0 | 0.0 | 10000 / 10000 / 10000 | COMPLETE |
