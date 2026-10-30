@@ -12,7 +12,6 @@ import com.example.registry.exceptions.IntakeRejectedException;
 import com.example.registry.messaging.RegisterUserCommand;
 import com.example.registry.messaging.RegistrationCommandPublisher;
 import com.example.registry.messaging.RegistrationPayload;
-import com.example.registry.messaging.RegistrationReply;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
@@ -21,25 +20,27 @@ import java.util.function.Supplier;
 import org.springframework.amqp.AmqpException;
 import org.springframework.stereotype.Service;
 
-/** Shared normalization and bounded HTTP waiting. Neither route opens a database transaction. */
+/** Shared normalization and admission; async publishes to RabbitMQ, sync processes directly. */
 @Service
-public class RegistrationIntakeService {
+public class RegistrationRequestService {
     private final RegistrationNormalizer normalizer;
     private final RegistrationCommandPublisher publisher;
+    private final RegistrationProcessor processor;
     private final IntakeProperties props;
     private final RegistryMetrics metrics;
     private final Semaphore admission;
 
-    public RegistrationIntakeService(RegistrationNormalizer normalizer, RegistrationCommandPublisher publisher,
-            IntakeProperties props, RegistryMetrics metrics) {
+    public RegistrationRequestService(RegistrationNormalizer normalizer, RegistrationCommandPublisher publisher,
+            RegistrationProcessor processor, IntakeProperties props, RegistryMetrics metrics) {
         this.normalizer = normalizer;
         this.publisher = publisher;
+        this.processor = processor;
         this.props = props;
         this.metrics = metrics;
         this.admission = new Semaphore(props.maxInFlight());
     }
 
-    public RegistrationAcceptedResponse accept(UUID registrationId, RegistrationRequest request) {
+    public RegistrationAcceptedResponse enqueue(UUID registrationId, RegistrationRequest request) {
         try {
             return admitted(() -> {
                 switch (publisher.publish(command(registrationId, request))) {
@@ -53,6 +54,9 @@ public class RegistrationIntakeService {
                 }
                 throw new IllegalStateException("Unreachable publisher outcome");
             });
+        } catch (AmqpException e) {
+            metrics.intake("broker_unavailable");
+            throw new IntakeRejectedException("broker_unavailable");
         } catch (IntakeOverloadedException e) {
             metrics.intake("overloaded");
             throw e;
@@ -65,21 +69,10 @@ public class RegistrationIntakeService {
         }
     }
 
-    public RegistrationResult register(UUID registrationId, RegistrationRequest request) {
+    public RegistrationResult registerDirectly(UUID registrationId, RegistrationRequest request) {
         try {
-            RegistrationResult result = admitted(() -> {
-                RegistrationReply reply = publisher.publishAndWait(command(registrationId, request));
-                if ("idempotency_conflict".equals(reply.conflict())) {
-                    throw new ConflictingPayloadException(registrationId);
-                }
-                if ("email_already_registered".equals(reply.conflict())) {
-                    throw new EmailAlreadyRegisteredException(registrationId);
-                }
-                if (reply.result() == null) {
-                    throw new IllegalStateException("Registration reply has no result");
-                }
-                return reply.result();
-            });
+            RegistrationResult result = admitted(
+                    () -> processor.process(command(registrationId, request), RegistrationMode.SYNC));
             metrics.synchronous(result.outcome() == RegistrationOutcome.CREATED ? "created" : "replayed");
             return result;
         } catch (IntakeOverloadedException e) {
@@ -109,10 +102,8 @@ public class RegistrationIntakeService {
         }
         try {
             return operation.get();
-        } catch (AmqpException e) {
-            throw new IntakeRejectedException("broker_unavailable");
         } finally {
-            // Sync retains its slot through the worker reply, bounding waiting HTTP requests too.
+            // Sync retains its slot through the database commit.
             admission.release();
         }
     }

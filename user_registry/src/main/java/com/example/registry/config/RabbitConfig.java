@@ -93,7 +93,7 @@ public class RabbitConfig {
      */
     @Bean
     MessageConverter jsonMessageConverter() {
-        // Replies carry a type header; trust only this application's command/reply package.
+        // Commands carry a type header; trust only this application's messaging package.
         return new JacksonJsonMessageConverter("com.example.registry.messaging");
     }
 

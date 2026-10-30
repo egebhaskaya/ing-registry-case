@@ -12,7 +12,7 @@ import org.springframework.test.web.servlet.client.RestTestClient;
 /**
  * HTTP contract of POST /registrations through the real embedded server (design
  * section 4).
- * The 503 paths are covered by RegistrationIntakeServiceTest; here the broker
+ * The 503 paths are covered by RegistrationRequestServiceTest; here the broker
  * is real and healthy.
  */
 @AutoConfigureRestTestClient

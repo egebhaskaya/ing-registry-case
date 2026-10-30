@@ -22,6 +22,34 @@ COMPLIANCE_MVN := compliance/mvnw -f compliance/pom.xml
 COUNT          ?= 50
 KAFKA_CLI      := MSYS_NO_PATHCONV=1 $(COMPOSE) exec kafka /opt/kafka/bin
 
+# Optional positional form: make k6 cont 200 (or make k6-sync cont 200).
+# Only these exact three goals are accepted, before any recipes can run.
+K6_RUN_ENV :=
+ifneq ($(filter cont,$(MAKECMDGOALS)),)
+  ifneq ($(words $(MAKECMDGOALS)),3)
+    $(error Usage: make k6 cont <requests-per-second> or make k6-sync cont <requests-per-second>)
+  endif
+  ifeq ($(filter k6 k6-sync,$(word 1,$(MAKECMDGOALS))),)
+    $(error cont is only supported after k6 or k6-sync)
+  endif
+  ifneq ($(word 2,$(MAKECMDGOALS)),cont)
+    $(error Usage: make k6 cont <requests-per-second> or make k6-sync cont <requests-per-second>)
+  endif
+  K6_RATE := $(word 3,$(MAKECMDGOALS))
+  # Remove decimal digits without evaluating the argument in a shell.
+  K6_RATE_REMAINDER := $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(K6_RATE)))))))))))
+  ifneq ($(strip $(K6_RATE_REMAINDER)),)
+    $(error Request rate must be a positive integer)
+  endif
+  ifeq ($(subst 0,,$(K6_RATE)),)
+    $(error Request rate must be a positive integer)
+  endif
+  override K6_RUN_ENV := CONTINUOUS=1 RATE=$(K6_RATE)
+  .PHONY: cont $(K6_RATE)
+  cont $(K6_RATE):
+	@:
+endif
+
 help: ## Show this list
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -83,11 +111,11 @@ register: ## Submit one registration with a fresh Idempotency-Key
 smoke: ## End-to-end check: COUNT registrations through every stage (default COUNT=50)
 	COUNT=$(COUNT) infra/smoke-test.sh
 
-k6: ## Send 10,000 requests to /registrations (accept and queue)
-	MODE=async bash load-tests/run-k6.sh
+k6: ## Async load: 10,000 requests; k6 cont <rate> runs until Ctrl+C
+	MODE=async $(K6_RUN_ENV) bash load-tests/run-k6.sh
 
-k6-sync: ## Send 10,000 requests to /registrations/sync (queue and wait for commit)
-	MODE=sync bash load-tests/run-k6.sh
+k6-sync: ## Direct sync load: 10,000 requests; k6-sync cont <rate> runs until Ctrl+C
+	MODE=sync $(K6_RUN_ENV) bash load-tests/run-k6.sh
 
 urls: ## Print the local URLs
 	@echo "Registry health     http://localhost:8080/actuator/health"

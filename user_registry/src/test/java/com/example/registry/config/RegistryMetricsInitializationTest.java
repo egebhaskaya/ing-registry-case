@@ -34,6 +34,14 @@ class RegistryMetricsInitializationTest {
             assertThat(completion).isNotNull();
             assertThat(completion.count()).isZero();
             assertThat(completion.totalTime(TimeUnit.SECONDS)).isZero();
+            var processing = registry.find("registry.registration.processing").timers();
+            assertThat(processing).hasSize(2);
+            for (String mode : List.of("sync", "async")) {
+                var timer = registry.find("registry.registration.processing").tag("mode", mode).timer();
+                assertThat(timer).as("processing timer for %s", mode).isNotNull();
+                assertThat(timer.count()).isZero();
+                assertThat(timer.totalTime(TimeUnit.SECONDS)).isZero();
+            }
             var httpSuccessTimers = registry.find("http.server.requests").timers();
             assertThat(httpSuccessTimers).hasSize(3).allSatisfy(timer -> {
                 assertThat(timer.count()).isZero();

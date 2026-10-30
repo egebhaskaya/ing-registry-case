@@ -44,7 +44,7 @@ class RegistrationProcessorTest {
             return created;
         });
 
-        assertThat(processor.process(command)).isEqualTo(created);
+        assertThat(processor.process(command, RegistrationMode.ASYNC)).isEqualTo(created);
 
         verify(metrics).registration("created");
         verify(metrics).completion(any());
@@ -57,7 +57,7 @@ class RegistrationProcessorTest {
         when(transactions.register(command)).thenThrow(new DuplicateKeyException("concurrent duplicate"));
         when(transactions.resolveDuplicate(command)).thenReturn(duplicate);
 
-        assertThat(processor.process(command)).isEqualTo(duplicate);
+        assertThat(processor.process(command, RegistrationMode.ASYNC)).isEqualTo(duplicate);
 
         InOrder order = inOrder(transactions);
         order.verify(transactions).register(command);
@@ -71,7 +71,7 @@ class RegistrationProcessorTest {
     void propagatesBusinessConflictsWithoutCountingATransientFailure() {
         when(transactions.register(command)).thenThrow(new ConflictingPayloadException(command.registrationId()));
 
-        assertThatThrownBy(() -> processor.process(command)).isInstanceOf(ConflictingPayloadException.class);
+        assertThatThrownBy(() -> processor.process(command, RegistrationMode.ASYNC)).isInstanceOf(ConflictingPayloadException.class);
 
         verify(metrics).registration("conflict");
         verify(metrics, never()).registrationFailed();
@@ -82,7 +82,7 @@ class RegistrationProcessorTest {
     void propagatesTransientFailuresForTheListenerRetryPolicy() {
         when(transactions.register(command)).thenThrow(new IllegalStateException("database failed"));
 
-        assertThatThrownBy(() -> processor.process(command)).isInstanceOf(IllegalStateException.class)
+        assertThatThrownBy(() -> processor.process(command, RegistrationMode.ASYNC)).isInstanceOf(IllegalStateException.class)
                 .hasMessage("database failed");
 
         verify(metrics).registrationFailed();

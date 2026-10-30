@@ -1,5 +1,5 @@
-// One registration per shared iteration. VUS bounds closed-loop client concurrency;
-// Rabbit consumer concurrency and the database pool bound server processing.
+// One registration per iteration: a fixed 10,000-request burst by default, or a fixed arrival rate.
+// Continuous mode runs until Ctrl+C or its finite DURATION ceiling; dropped iterations remain visible.
 // MODE=async measures publisher-confirmed acceptance. MODE=sync measures commit before response.
 // No retries: rejected requests stay visible in the primary benchmark.
 import http from 'k6/http';
@@ -14,14 +14,34 @@ const MODE = __ENV.MODE || 'async';
 const SUMMARY_DIR = __ENV.SUMMARY_DIR || '/results';
 if (MODE !== 'async' && MODE !== 'sync') throw new Error('MODE must be async or sync');
 const PATH = MODE === 'sync' ? '/registrations/sync' : '/registrations';
+const CONTINUOUS_FLAG = __ENV.CONTINUOUS === undefined ? '0' : __ENV.CONTINUOUS;
+if (CONTINUOUS_FLAG !== '0' && CONTINUOUS_FLAG !== '1') throw new Error('CONTINUOUS must be 0 or 1');
+const CONTINUOUS = CONTINUOUS_FLAG === '1';
+const VUS = positiveInteger('VUS', 50);
+const RATE = positiveInteger('RATE', 100);
+const MAX_VUS = positiveInteger('MAX_VUS', 200);
+if (CONTINUOUS && MAX_VUS < VUS) throw new Error('MAX_VUS must be at least VUS in continuous mode');
+const ITERATIONS = Number(__ENV.ITERATIONS || 10000);
+const BURST_DURATION = __ENV.MAX_DURATION || '10m';
+const CONTINUOUS_DURATION = __ENV.DURATION || '8760h';
 
 export const options = {
-  scenarios: {
+  scenarios: CONTINUOUS ? {
+    continuous: {
+      executor: 'constant-arrival-rate',
+      rate: RATE,
+      timeUnit: '1s',
+      duration: CONTINUOUS_DURATION,
+      preAllocatedVUs: VUS,
+      maxVUs: MAX_VUS,
+      gracefulStop: '30s',
+    },
+  } : {
     burst: {
       executor: 'shared-iterations',
-      vus: Number(__ENV.VUS || 50),
-      iterations: Number(__ENV.ITERATIONS || 10000),
-      maxDuration: __ENV.MAX_DURATION || '10m',
+      vus: VUS,
+      iterations: ITERATIONS,
+      maxDuration: BURST_DURATION,
     },
   },
   summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
@@ -81,12 +101,18 @@ export default function () {
 }
 
 export function handleSummary(data) {
+  const interrupted = data.state && data.state.isInterrupted;
   const summary = { ...data, run: {
     id: RUN_ID,
     mode: MODE,
     endpoint: PATH,
-    requestedIterations: Number(__ENV.ITERATIONS || 10000),
-    virtualUsers: Number(__ENV.VUS || 50),
+    scenario: CONTINUOUS ? 'continuous' : 'burst',
+    requestedIterations: CONTINUOUS ? null : ITERATIONS,
+    virtualUsers: VUS,
+    requestedRate: CONTINUOUS ? RATE : null,
+    maxVirtualUsers: CONTINUOUS ? MAX_VUS : VUS,
+    plannedDuration: CONTINUOUS ? CONTINUOUS_DURATION : BURST_DURATION,
+    ...(typeof interrupted === 'boolean' ? { interrupted } : {}),
     finishedAt: new Date().toISOString(),
   } };
   const m = data.metrics;
@@ -95,7 +121,14 @@ export function handleSummary(data) {
   const lines = [
     `run id:            ${RUN_ID}`,
     `mode:              ${MODE} (${MODE === 'sync' ? 'commit before response' : 'publisher-confirmed acceptance'})`,
-    `iterations:        ${val('iterations', 'count')} (wanted ${Number(__ENV.ITERATIONS || 10000)})`,
+    `scenario:          ${CONTINUOUS ? 'continuous fixed arrival rate; stop with Ctrl+C' : 'burst (shared iterations)'}`,
+    ...(CONTINUOUS ? [
+      `target rate:       ${RATE} iterations/s (one POST each)`,
+      `VU baseline / max: ${VUS} / ${MAX_VUS}`,
+      `duration ceiling:  ${CONTINUOUS_DURATION}`,
+      `iterations:        ${val('iterations', 'count')} completed`,
+      `dropped iterations: ${count('dropped_iterations')}`,
+    ] : [`iterations:        ${val('iterations', 'count')} (wanted ${ITERATIONS})`]),
     `created (201):     ${count('registrations_created')}`,
     `replayed (200):    ${count('registrations_replayed')}`,
     `accepted (202):    ${count('registrations_accepted')}`,
@@ -106,6 +139,7 @@ export function handleSummary(data) {
     `http p50 / p95 ms: ${fmt(val('http_req_duration', 'med'))} / ${fmt(val('http_req_duration', 'p(95)'))}`,
     `success p50/p95 ms: ${fmt(val('registration_success_latency', 'med'))} / ${fmt(val('registration_success_latency', 'p(95)'))}`,
     `submission took:   ${fmt(data.state.testRunDurationMs / 1000)} s`,
+    `observed HTTP /s:  ${fmt(val('http_reqs', 'rate'))}`,
   ];
   return {
     stdout: lines.join('\n') + '\n',
@@ -114,6 +148,12 @@ export function handleSummary(data) {
 }
 
 function fmt(x) { return typeof x === 'number' ? x.toFixed(1) : String(x); }
+
+function positiveInteger(name, fallback) {
+  const value = Number(__ENV[name] === undefined ? fallback : __ENV[name]);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  return value;
+}
 
 // Give each run a compact, deterministic prefix for unique registration keys.
 function fnv1a32Hex(s) {

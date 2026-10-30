@@ -1,7 +1,7 @@
 {
   "uid": "registration-case",
   "title": "Registration Case",
-  "description": "One shared RabbitMQ pipeline for async and sync registrations. One-second samples and refresh; server decision and processing rates use 10-second windows. Histogram p95 estimates use 30-second windows, with HTTP on the right millisecond axis and completion on the left second axis. Lifetime counters reset independently on each service restart.",
+  "description": "Async registrations use RabbitMQ; sync calls the shared Registry processor directly. Separate HTTP response and Registry processing-to-commit graphs use milliseconds. The processing comparison uses the same boundary for both modes, including database connection waiting but excluding Rabbit queue waiting and downstream Compliance; concurrency can differ. One-second samples and refresh, 10-second rates, and rolling 30-second histogram p95 estimates. Lifetime counters reset independently on service restart.",
   "tags": [
     "registration-case"
   ],
@@ -10,7 +10,7 @@
   "graphTooltip": 1,
   "refresh": "1s",
   "schemaVersion": 39,
-  "version": 6,
+  "version": 10,
   "time": {
     "from": "now-5m",
     "to": "now"
@@ -26,7 +26,7 @@
       "id": 1,
       "type": "stat",
       "title": "Configuration and current activity",
-      "description": "Configured limits are not measured busy workers. Both HTTP routes use the same Registry consumers. Prefetch limits unacknowledged deliveries per consumer; the pool maximum caps Registry database connections. Virtual threads reports Registry thread mode. Useful Compliance concurrency is limited by the event topic's actual partition count. Compliance busy now is measured work in progress, including database waiting, and can remain nonzero after Registry has finished.",
+      "description": "Configured limits are not measured busy work. Rabbit consumer count and prefetch apply only to async registrations; direct sync requests are bounded by shared HTTP admission and the database pool. Prefetch limits unfinished deliveries per Rabbit consumer. Both paths share Registry database connections. Virtual threads reports Registry thread mode. Compliance busy now includes database waiting and can remain nonzero after Registry has finished; useful Kafka concurrency is bounded by partition count.",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -41,13 +41,13 @@
         {
           "refId": "A",
           "expr": "(max(registry_config_consumers{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Registry consumers",
+          "legendFormat": "Async Rabbit consumers",
           "instant": true
         },
         {
           "refId": "B",
           "expr": "(max(registry_config_prefetch{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Prefetch / consumer",
+          "legendFormat": "Async prefetch / consumer",
           "instant": true
         },
         {
@@ -130,7 +130,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Server decisions and processing /s",
-      "description": "Ten-second rate estimates from application counters sampled every second, not exact k6 burst throughput. Async accepted decisions follow broker confirmation. Sync completed decisions follow a committed worker result and include replays. Registry creations and Compliance checks count new committed results. These stages can finish at different times.",
+      "description": "Ten-second rate estimates from application counters sampled every second, not exact k6 burst throughput. Async accepted decisions follow RabbitMQ broker confirmation. Sync completed decisions follow a direct Registry transaction and include replays. Registry creations and Compliance checks count new committed results. These stages can finish at different times.",
       "gridPos": {
         "x": 0,
         "y": 3,
@@ -205,8 +205,8 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "RabbitMQ queue",
-      "description": "Sampled messages in the shared registration.commands queue. Ready messages wait at the broker. Unacknowledged includes processing and prefetched deliveries waiting at consumers, so it is not a busy-worker count. Both must reach zero to drain. Missing queue metrics remain a gap rather than an invented zero. Legend maxima are observed samples and can miss shorter peaks.",
+      "title": "RabbitMQ queue (async only)",
+      "description": "Sampled async messages in registration.commands. Direct sync requests do not enter this queue. Ready messages wait at the broker. Unacknowledged includes processing and prefetched deliveries waiting at Rabbit consumers, so it is not a busy-worker count. Ready and unacknowledged must both reach zero to drain. Missing telemetry remains a gap; sampled maxima can miss shorter peaks.",
       "gridPos": {
         "x": 12,
         "y": 3,
@@ -269,8 +269,8 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Registry workers and database pool",
-      "description": "One-second samples. Workers in progress are executing a command, including time waiting for a database connection. Active connections are borrowed from Hikari; pending callers wait for one. Compare measured workers with connections to see the pool limit. Counts are not CPU parallelism. Short activity between samples can still be missed.",
+      "title": "Registry processing and database pool",
+      "description": "One-second samples. Processing registrations includes direct HTTP requests and Rabbit worker attempts, including time waiting for a database connection. This total is not bounded by Rabbit consumer count. Both paths share Hikari: active connections are borrowed; pending callers wait for one. Counts are not CPU parallelism. Short activity between samples can be missed.",
       "gridPos": {
         "x": 0,
         "y": 15,
@@ -285,7 +285,7 @@
         {
           "refId": "A",
           "expr": "(sum(registry_workers_active{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Workers in progress (includes waiting)",
+          "legendFormat": "Processing registrations (HTTP + Rabbit)",
           "instant": false
         },
         {
@@ -368,8 +368,8 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "p95 HTTP response and pipeline completion",
-      "description": "Thirty-second histogram estimates. Left axis: Registry and Compliance completion in seconds, including queue waiting. Right axis: successful HTTP response time in milliseconds; async ends after broker confirmation and sync after the Registry commit reply. The axes have different scales. Empty observation windows remain gaps. Estimates can blend nearby runs and differ from exact per-run k6 response measurements.",
+      "title": "HTTP response time (p95, milliseconds)",
+      "description": "Successful HTTP responses over a rolling 30-second window. Async returns after RabbitMQ confirms acceptance; processing can continue afterward. Sync returns after its direct Registry transaction commits. These responses promise different things: a lower async response time does not mean a faster database write. Histogram estimates can differ from exact per-run k6 measurements. Idle windows remain gaps.",
       "gridPos": {
         "x": 12,
         "y": 15,
@@ -384,31 +384,19 @@
         {
           "refId": "A",
           "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations\",method=\"POST\",status=\"202\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "HTTP async (202)",
+          "legendFormat": "Async: accepted into RabbitMQ (202)",
           "instant": false
         },
         {
           "refId": "B",
           "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations/sync\",method=\"POST\",status=~\"200|201\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "HTTP sync (200/201)",
-          "instant": false
-        },
-        {
-          "refId": "C",
-          "expr": "(histogram_quantile(0.95, sum by (le) (rate(registry_registration_completion_seconds_bucket{job=\"registry\",application=\"registry-service\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Registry completion",
-          "instant": false
-        },
-        {
-          "refId": "D",
-          "expr": "(histogram_quantile(0.95, sum by (le) (rate(compliance_completion_seconds_bucket{job=\"compliance\",application=\"compliance-service\"}[30s])))) and on() (max(up{job=\"compliance\"}) == 1)",
-          "legendFormat": "Compliance completion",
+          "legendFormat": "Sync: Registry DB committed (200/201)",
           "instant": false
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
+          "unit": "ms",
           "min": 0,
           "color": {
             "mode": "palette-classic"
@@ -422,47 +410,37 @@
             "spanNulls": false,
             "axisCenteredZero": false,
             "axisPlacement": "left",
-            "axisLabel": "Completion (seconds)"
+            "axisLabel": "HTTP response (milliseconds)"
           }
         },
         "overrides": [
           {
             "matcher": {
               "id": "byName",
-              "options": "HTTP async (202)"
+              "options": "Async: accepted into RabbitMQ (202)"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "ms"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "HTTP response (milliseconds)"
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
               }
             ]
           },
           {
             "matcher": {
               "id": "byName",
-              "options": "HTTP sync (200/201)"
+              "options": "Sync: Registry DB committed (200/201)"
             },
             "properties": [
               {
-                "id": "unit",
-                "value": "ms"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "HTTP response (milliseconds)"
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
               }
             ]
           }
@@ -485,13 +463,111 @@
       "interval": "1s"
     },
     {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Registry processing to commit (p95, milliseconds)",
+      "description": "The same timing boundary for both modes: processing starts on the HTTP thread or Rabbit worker and ends after the new user and outbox commit. Includes database connection waiting and transaction work. Excludes HTTP admission and normalization, Rabbit queue waiting and retry backoff, Kafka and Compliance. Only successful new registrations are recorded; replays and failures are excluded. Direct HTTP requests and Rabbit workers can still have different concurrency limits. Rolling 30-second histogram estimates can blend nearby runs. Idle windows and earlier runs remain gaps because this new metric has no historical backfill.",
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(registry_registration_processing_seconds_bucket{job=\"registry\",application=\"registry-service\",mode=\"sync\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Direct /sync: processing to commit",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(registry_registration_processing_seconds_bucket{job=\"registry\",application=\"registry-service\",mode=\"async\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Async worker: processing to commit",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 3,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisCenteredZero": false,
+            "axisPlacement": "left",
+            "axisLabel": "Registry processing to commit (milliseconds)"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Direct /sync: processing to commit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Async worker: processing to commit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "width": 360
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "interval": "1s"
+    },
+    {
       "id": 6,
       "type": "stat",
       "title": "Progress since each service started",
       "description": "Application decision and result counters since each service process started, not totals for the selected range or an exact per-run ledger. Async accepted and sync completed are server decisions; sync includes replay responses. Registry creations count new users, while Compliance checks count new results. Services reset independently on restart, so these values need not match. Use the HTML k6 report for a specific run.",
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 37,
         "w": 12,
         "h": 4
       },
@@ -558,7 +634,7 @@
       "description": "Counters since each service started. HTTP 4xx/5xx includes validation errors, conflicts and 503 responses; a timeout can have an unknown outcome. Failed attempts can be retried. Dead-letter values count publishes, not current queue depth. Services reset independently. An absent HTTP error counter is zero only while Registry is UP; unavailable telemetry remains No data.",
       "gridPos": {
         "x": 12,
-        "y": 27,
+        "y": 37,
         "w": 12,
         "h": 4
       },
@@ -617,6 +693,470 @@
         "justifyMode": "auto",
         "wideLayout": true
       }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Operational checks",
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Scrape reachability",
+      "description": "Prometheus scrape reachability only: UP means the metrics endpoint answered, not that registrations, Kafka or CDC are healthy. DOWN means a configured target failed its scrape. UNKNOWN means no up series exists for that job. No success guard hides DOWN states.",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 18,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(up{job=\"registry\"}) or on() vector(-1)",
+          "legendFormat": "Registry",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "max(up{job=\"compliance\"}) or on() vector(-1)",
+          "legendFormat": "Compliance",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "max(up{job=\"rabbitmq\"}) or on() vector(-1)",
+          "legendFormat": "RabbitMQ",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": -1,
+          "noValue": "UNKNOWN",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "UNKNOWN",
+                  "color": "gray"
+                },
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNKNOWN",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "max": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "gray",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Registry DLQ depth (current)",
+      "description": "Messages currently remaining in registration.commands.dlq: READY plus delivered/unacknowledged. This is current depth, not the lifetime dead-letter publication counter. Any positive depth is red. Missing queue series or an unreachable RabbitMQ scrape remain UNKNOWN; there is no zero fallback.",
+      "gridPos": {
+        "x": 18,
+        "y": 42,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands.dlq\"}) + sum(rabbitmq_queue_messages_unacked{job=\"rabbitmq\",queue=\"registration.commands.dlq\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
+          "legendFormat": "DLQ messages",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "UNKNOWN",
+          "mappings": [
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "UNKNOWN",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name",
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal",
+        "justifyMode": "auto",
+        "wideLayout": true
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Kafka fetch-position lag (records)",
+      "description": "Sum of observed nonnegative client fetch-position lag for the exact topic outbox.event.user. This excludes dotted/underscored topic-label aliases and uses current lag, not rolling lag_max values. Fetch lag is not committed-offset lag or unfinished business work: zero does not prove every Compliance result committed. Missing, negative or NaN samples remain gaps, and an unreachable Compliance scrape hides stale values.",
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(sum(kafka_consumer_fetch_manager_records_lag{job=\"compliance\",application=\"compliance-service\",topic=\"outbox.event.user\"} >= 0)) and on() (max(up{job=\"compliance\"}) == 1)",
+          "legendFormat": "Observed fetch-position lag",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 3,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisCenteredZero": false,
+            "axisPlacement": "left"
+          },
+          "noValue": "No data",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "interval": "1s"
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Errors per second",
+      "description": "Ten-second rates, not lifetime totals or counts for one benchmark run. HTTP 5xx covers POST /registrations and /registrations/sync; Registry failed attempts count technical processing failures and can overlap HTTP failures or retried async work, so do not add the lines. Rates handle counter resets. HTTP error labels are created on first occurrence: rates need two samples and can undercount an initial short burst. The Registry failed-attempt counter is pre-initialized. An absent HTTP 5xx series is treated as zero only while Registry is UP; a failed scrape remains a gap.",
+      "gridPos": {
+        "x": 12,
+        "y": 46,
+        "w": 12,
+        "h": 9
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync)?\",method=\"POST\",status=~\"5..\"}[10s]))) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "HTTP 5xx /s",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "expr": "(sum(rate(registry_registrations_failures_total{job=\"registry\",application=\"registry-service\"}[10s]))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Registry failed attempts /s",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 3,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisCenteredZero": false,
+            "axisPlacement": "left"
+          },
+          "noValue": "No data",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "interval": "1s"
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "JVM diagnostics",
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "JVM heap used (%)",
+          "description": "Heap used as a percentage of the available reported heap maximum, separately for each application process. Used bytes include all heap pools; the denominator sums only positive maximums because G1 Eden/Survivor can report -1. Allocation and collection normally make this fluctuate; growth alone does not establish a leak. Missing memory metrics or an unreachable application scrape remain gaps.",
+          "gridPos": {
+            "x": 0,
+            "y": 56,
+            "w": 12,
+            "h": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(100 * sum by (job) (jvm_memory_used_bytes{job=~\"registry|compliance\",area=\"heap\"}) / sum by (job) (jvm_memory_max_bytes{job=~\"registry|compliance\",area=\"heap\"} > 0)) and on(job) (max by (job) (up{job=~\"registry|compliance\"}) == 1)",
+              "legendFormat": "{{job}} heap used",
+              "instant": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 3,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisCenteredZero": false,
+                "axisPlacement": "left"
+              },
+              "noValue": "No data",
+              "max": 100,
+              "decimals": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "interval": "1s"
+        },
+        {
+          "id": 16,
+          "type": "timeseries",
+          "title": "GC pause time (%)",
+          "description": "Percentage of wall-clock time recorded as GC pauses, averaged over 30 seconds for each application. Computed as 100 times the rate of cumulative jvm_gc_pause_seconds_sum. This is pause time, not CPU utilization and not an individual pause duration. Missing GC series or an unreachable application scrape remain gaps; no observations are invented.",
+          "gridPos": {
+            "x": 12,
+            "y": 56,
+            "w": 12,
+            "h": 9
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "(100 * sum by (job) (rate(jvm_gc_pause_seconds_sum{job=~\"registry|compliance\"}[30s]))) and on(job) (max by (job) (up{job=~\"registry|compliance\"}) == 1)",
+              "legendFormat": "{{job}} GC pause time",
+              "instant": false
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineInterpolation": "linear",
+                "lineWidth": 2,
+                "fillOpacity": 3,
+                "showPoints": "never",
+                "spanNulls": false,
+                "axisCenteredZero": false,
+                "axisPlacement": "left"
+              },
+              "noValue": "No data",
+              "decimals": 2
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "interval": "1s"
+        }
+      ]
     }
   ],
   "timepicker": {

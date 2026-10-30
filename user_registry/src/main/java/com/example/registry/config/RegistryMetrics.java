@@ -1,5 +1,6 @@
 package com.example.registry.config;
 
+import com.example.registry.services.RegistrationMode;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -10,12 +11,14 @@ import org.springframework.boot.thread.Threading;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
-/** Counters, completion timers and configured limits shared by both HTTP routes and the Rabbit worker. */
+/** Counters, completion timers and configured limits for direct HTTP calls and Rabbit workers. */
 @Component
 public class RegistryMetrics {
 
     private final MeterRegistry registry;
     private final Timer completion;
+    private final Timer directProcessing;
+    private final Timer asyncProcessing;
     private final AtomicInteger activeWorkers = new AtomicInteger();
 
     public RegistryMetrics(MeterRegistry registry, RabbitProperties rabbitProperties, Environment environment) {
@@ -33,11 +36,13 @@ public class RegistryMetrics {
         registry.counter("registry.registrations.failures");
         registry.counter("registry.registrations.dead_lettered");
         this.completion = registry.timer("registry.registration.completion");
+        this.directProcessing = processingTimer("sync");
+        this.asyncProcessing = processingTimer("async");
         registerHttpSuccessTimer("/registrations", "202");
         registerHttpSuccessTimer("/registrations/sync", "200");
         registerHttpSuccessTimer("/registrations/sync", "201");
         Gauge.builder("registry.workers.active", activeWorkers, AtomicInteger::get)
-                .description("Registration attempts in progress, including database waits; excludes queued deliveries and retry backoff")
+                .description("Direct HTTP and Rabbit registration attempts in progress, including database waits; excludes queued deliveries and retry backoff")
                 .register(registry);
 
         // Configuration gauges for the dashboard's context row: what this instance is bounded by.
@@ -84,6 +89,18 @@ public class RegistryMetrics {
     /** Submission to user + outbox commit, including queue waiting. */
     public void completion(Duration duration) {
         completion.record(duration);
+    }
+
+    /** Successful new registrations: processor entry through commit, including database connection waiting. */
+    public void processing(RegistrationMode mode, Duration duration) {
+        (mode == RegistrationMode.SYNC ? directProcessing : asyncProcessing).record(duration);
+    }
+
+    private Timer processingTimer(String mode) {
+        return Timer.builder("registry.registration.processing")
+                .description("New registration processing through commit, including DB connection waits but excluding RabbitMQ queue waits")
+                .tag("mode", mode)
+                .register(registry);
     }
 
     private void registerHttpSuccessTimer(String uri, String status) {

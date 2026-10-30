@@ -1,19 +1,14 @@
 package com.example.registry.messaging;
 
 import com.example.registry.config.RegistryRabbitProperties;
-import com.example.registry.exceptions.IntakeOutcomeUnknownException;
-import com.example.registry.exceptions.IntakeRejectedException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import org.springframework.amqp.AmqpConnectException;
-import org.springframework.amqp.AmqpException;
-import org.springframework.amqp.core.AmqpMessageReturnedException;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
 
-/** Both modes publish to the same queue; only the synchronous mode requests a worker reply. */
+/** Publishes commands for the asynchronous endpoint and checks broker confirmation and routing. */
 @Component
 public class RegistrationCommandPublisher {
     private final RabbitTemplate rabbitTemplate;
@@ -28,35 +23,6 @@ public class RegistrationCommandPublisher {
         CorrelationData correlation = new CorrelationData();
         rabbitTemplate.convertAndSend(props.exchange(), props.routingKey(), command, correlation);
         return outcome(correlation);
-    }
-
-    public RegistrationReply publishAndWait(RegisterUserCommand command) {
-        CorrelationData correlation = new CorrelationData();
-        Object reply;
-        try {
-            reply = rabbitTemplate.convertSendAndReceive(props.exchange(), props.routingKey(), command, correlation);
-        } catch (AmqpMessageReturnedException e) {
-            throw new IntakeRejectedException("unroutable");
-        } catch (AmqpConnectException e) {
-            throw e;
-        } catch (AmqpException e) {
-            // Losing the reply channel cannot establish that the command failed to reach the queue.
-            throw new IntakeOutcomeUnknownException();
-        }
-        if (reply instanceof RegistrationReply result) {
-            // A worker result is stronger evidence than a publisher confirm: the transaction has finished.
-            return result;
-        }
-        if (reply != null) {
-            throw new IllegalStateException("Unexpected registration reply type");
-        }
-        switch (outcome(correlation)) {
-            case REJECTED -> throw new IntakeRejectedException("broker_rejected");
-            case UNROUTABLE -> throw new IntakeRejectedException("unroutable");
-            case UNKNOWN -> throw new IntakeOutcomeUnknownException();
-            case CONFIRMED -> throw new IntakeOutcomeUnknownException("reply_timeout");
-        }
-        throw new IllegalStateException("Unreachable publisher outcome");
     }
 
     private PublishOutcome outcome(CorrelationData correlation) {

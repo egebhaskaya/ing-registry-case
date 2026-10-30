@@ -50,6 +50,10 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
         assertThat(async.count()).isZero();
         assertThat(created.count()).isZero();
         assertThat(replayed.count()).isZero();
+        Timer asyncProcessing = meters.get("registry.registration.processing").tag("mode", "async").timer();
+        Timer syncProcessing = meters.get("registry.registration.processing").tag("mode", "sync").timer();
+        assertThat(asyncProcessing.count()).isZero();
+        assertThat(syncProcessing.count()).isZero();
         UUID key = UUID.randomUUID();
         client.post().uri("/registrations")
                 .header("Idempotency-Key", key.toString())
@@ -76,6 +80,8 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
             assertThat(async.count()).isEqualTo(1);
             assertThat(created.count()).isEqualTo(1);
             assertThat(replayed.count()).isEqualTo(1);
+            assertThat(asyncProcessing.count()).isEqualTo(1);
+            assertThat(syncProcessing.count()).isEqualTo(1);
         });
 
         String metrics = client.get().uri("/actuator/prometheus")
@@ -90,6 +96,7 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .contains("registry_intake_requests_total{application=\"registry-service\",outcome=\"accepted\"}")
                 .contains("registry_registrations_total{application=\"registry-service\",outcome=\"created\"}")
                 .contains("registry_registration_completion_seconds_bucket")
+                .contains("registry_registration_processing_seconds_bucket")
                 // configuration and runtime gauges for the dashboard's context row
                 .contains("registry_config_consumers{application=\"registry-service\"} "
                         + rabbitProperties.getListener().getSimple().getConcurrency().doubleValue())
@@ -102,6 +109,13 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .contains("http_server_requests_seconds_bucket{")
                 .contains("hikaricp_connections_max{")
                 .contains("jvm_info{");
+        assertThat(hasProcessingBuckets(metrics, "sync")).isTrue();
+        assertThat(hasProcessingBuckets(metrics, "async")).isTrue();
+    }
+
+    private static boolean hasProcessingBuckets(String metrics, String mode) {
+        return metrics.lines().anyMatch(line -> line.startsWith("registry_registration_processing_seconds_bucket{")
+                && line.contains("mode=\"" + mode + "\""));
     }
 
     private Timer singleSuccessTimer(String uri, String status) {
