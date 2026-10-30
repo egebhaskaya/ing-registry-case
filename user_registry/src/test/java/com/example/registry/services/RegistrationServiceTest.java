@@ -63,11 +63,12 @@ class RegistrationServiceTest extends AbstractIntegrationTest {
     void createsOneUserAndOneOutboxEvent() {
         RegisterUserCommand command = command(UUID.randomUUID(), "Ada Lovelace", "ada@example.com");
 
-        RegistrationOutcome outcome = service.register(command);
+        RegistrationResult result = service.register(command);
 
-        assertThat(outcome).isEqualTo(RegistrationOutcome.CREATED);
+        assertThat(result.outcome()).isEqualTo(RegistrationOutcome.CREATED);
         assertThat(users.count()).isEqualTo(1);
         User user = users.findByRegistrationId(command.registrationId()).orElseThrow();
+        assertThat(result.user()).isEqualTo(user);
         assertThat(user.email()).isEqualTo("ada@example.com");
 
         List<OutboxEvent> events = outbox.findAll();
@@ -88,9 +89,10 @@ class RegistrationServiceTest extends AbstractIntegrationTest {
         RegisterUserCommand command = command(UUID.randomUUID(), "Ada Lovelace", "ada@example.com");
         service.register(command);
 
-        RegistrationOutcome second = service.register(command);
+        RegistrationResult second = service.register(command);
 
-        assertThat(second).isEqualTo(RegistrationOutcome.DUPLICATE_IGNORED);
+        assertThat(second.outcome()).isEqualTo(RegistrationOutcome.DUPLICATE_IGNORED);
+        assertThat(second.user()).isEqualTo(users.findByRegistrationId(command.registrationId()).orElseThrow());
         assertThat(users.count()).isEqualTo(1);
         assertThat(outbox.count()).isEqualTo(1);
     }
@@ -125,7 +127,7 @@ class RegistrationServiceTest extends AbstractIntegrationTest {
         RegisterUserCommand command = command(UUID.randomUUID(), "Ada Lovelace", "ada@example.com");
         service.register(command);
 
-        assertThat(service.resolveDuplicate(command)).isEqualTo(RegistrationOutcome.DUPLICATE_IGNORED);
+        assertThat(service.resolveDuplicate(command).outcome()).isEqualTo(RegistrationOutcome.DUPLICATE_IGNORED);
     }
 
     @Test
@@ -159,12 +161,12 @@ class RegistrationServiceTest extends AbstractIntegrationTest {
         AtomicBoolean uniqueViolationSeen = new AtomicBoolean(false);
         Runnable delivery = () -> {
             try {
-                outcomes.add(service.register(command));
+                outcomes.add(service.register(command).outcome());
             } catch (DuplicateKeyException e) {
                 // Exactly what the listener does: the losing transaction is gone; classify in a
                 // fresh one.
                 uniqueViolationSeen.set(true);
-                outcomes.add(service.resolveDuplicate(command));
+                outcomes.add(service.resolveDuplicate(command).outcome());
             }
         };
         Thread first = Thread.ofVirtual().start(delivery);

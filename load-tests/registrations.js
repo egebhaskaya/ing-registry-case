@@ -1,5 +1,5 @@
 // One registration per shared iteration. VUS bounds closed-loop client concurrency;
-// registry.processing.max-concurrency separately bounds server transaction concurrency.
+// Rabbit consumer concurrency and the database pool bound server processing.
 // MODE=async measures publisher-confirmed acceptance. MODE=sync measures commit before response.
 // No retries: rejected requests stay visible in the primary benchmark.
 import http from 'k6/http';
@@ -81,6 +81,14 @@ export default function () {
 }
 
 export function handleSummary(data) {
+  const summary = { ...data, run: {
+    id: RUN_ID,
+    mode: MODE,
+    endpoint: PATH,
+    requestedIterations: Number(__ENV.ITERATIONS || 10000),
+    virtualUsers: Number(__ENV.VUS || 50),
+    finishedAt: new Date().toISOString(),
+  } };
   const m = data.metrics;
   const val = (name, stat) => (m[name] && m[name].values && m[name].values[stat] !== undefined ? m[name].values[stat] : 'n/a');
   const count = (name) => (m[name] && m[name].values ? m[name].values.count : 0);
@@ -101,13 +109,13 @@ export function handleSummary(data) {
   ];
   return {
     stdout: lines.join('\n') + '\n',
-    [`${SUMMARY_DIR}/${RUN_ID}.summary.json`]: JSON.stringify(data, null, 2),
+    [`${SUMMARY_DIR}/${RUN_ID}.summary.json`]: JSON.stringify(summary, null, 2),
   };
 }
 
 function fmt(x) { return typeof x === 'number' ? x.toFixed(1) : String(x); }
 
-// Matches the existing async experiment's run-id prefix for Compliance count verification.
+// Give each run a compact, deterministic prefix for unique registration keys.
 function fnv1a32Hex(s) {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {

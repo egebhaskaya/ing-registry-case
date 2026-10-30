@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
@@ -29,13 +30,15 @@ import tools.jackson.databind.ObjectMapper;
 
 /** The synchronous HTTP response describes committed Registry data, including on retries. */
 @AutoConfigureRestTestClient
-@TestPropertySource(properties = "spring.rabbitmq.listener.simple.auto-startup=false")
+@TestPropertySource(properties = "spring.rabbitmq.template.reply-timeout=5s")
 class SynchronousRegistrationControllerTest extends AbstractIntegrationTest {
 
     @Autowired
     RestTestClient client;
     @Autowired
     ObjectMapper objectMapper;
+    @Autowired
+    RabbitTemplate rabbitTemplate;
     @MockitoSpyBean
     UserRepository users;
     @MockitoSpyBean
@@ -142,7 +145,9 @@ class SynchronousRegistrationControllerTest extends AbstractIntegrationTest {
 
         Reply reply = post(UUID.randomUUID(), request("Ada Lovelace", "ada@example.com", "NL"));
 
-        assertThat(reply.status()).isEqualTo(500);
+        assertThat(reply.status()).isEqualTo(503);
+        assertThat(reply.body().path("reason").asText()).isEqualTo("reply_timeout");
+        assertThat(rabbitTemplate.receive("registration.commands.dlq", 10_000)).isNotNull();
         assertThat(users.count()).isZero();
         assertThat(outbox.count()).isZero();
     }

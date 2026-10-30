@@ -8,17 +8,7 @@ import org.springframework.boot.thread.Threading;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
-/**
- * The Registry's own metrics (design sections 7 and 8), in one place so the names and labels the
- * Grafana dashboard depends on are defined once.
- *
- * <p>Micrometer vocabulary: a <em>counter</em> only goes up (requests seen), a <em>timer</em> records
- * durations as a histogram (so p95 can be computed from buckets, never from an average), and a
- * <em>gauge</em> reports a current value (a configured limit). Labels ("tags") are bounded sets such
- * as {@code outcome}; never a registration id or an email, which would create one series per request.
- * Names are dotted here and rendered with underscores by Prometheus, e.g.
- * {@code registry.intake.requests} becomes {@code registry_intake_requests_total}.
- */
+/** Counters, completion timers and configured limits shared by both HTTP routes and the Rabbit worker. */
 @Component
 public class RegistryMetrics {
 
@@ -40,32 +30,27 @@ public class RegistryMetrics {
                 .register(registry);
     }
 
-    /** One HTTP intake decision: accepted, overloaded, broker_rejected, unroutable, broker_unavailable, confirm_timeout. */
     public void intake(String outcome) {
         registry.counter("registry.intake.requests", "outcome", outcome).increment();
     }
 
-    /** One synchronous HTTP decision: created, replayed, conflict, overloaded, failed. */
     public void synchronous(String outcome) {
         registry.counter("registry.sync.requests", "outcome", outcome).increment();
     }
 
-    /** One committed processing result across HTTP and Rabbit: created, duplicate_ignored, conflict. */
     public void registration(String outcome) {
         registry.counter("registry.registrations", "outcome", outcome).increment();
     }
 
-    /** One processing attempt that threw (retried consumer attempts count every time). */
     public void registrationFailed() {
         registry.counter("registry.registrations.failures").increment();
     }
 
-    /** One command republished to the dead-letter queue. */
     public void deadLettered() {
         registry.counter("registry.registrations.dead_lettered").increment();
     }
 
-    /** Submission to user + outbox commit across both routes, including any queue/admission waiting. */
+    /** Submission to user + outbox commit, including queue waiting. */
     public void completion(Duration duration) {
         registry.timer("registry.registration.completion").record(duration);
     }

@@ -19,29 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
-/**
- * The registration transaction (design section 5): one user plus one outbox
- * event, committed together.
- *
- * <p>
- * {@code @Transactional} makes Spring wrap the method in a database
- * transaction: a connection is
- * taken from the Hikari pool, every SQL statement inside runs on it, and the
- * transaction commits when
- * the method returns, or rolls back when it throws a {@code RuntimeException}
- * (Spring's default; a
- * checked exception would commit, which is why nothing here throws one). That
- * is what makes "user and
- * outbox together" true: if the outbox insert fails, the user insert is undone
- * with it.
- *
- * <p>
- * This works because the listener calls this bean from the outside. Spring
- * applies
- * {@code @Transactional} through a proxy around the bean, so a method calling
- * another method of the
- * same class would bypass it.
- */
+/** User and outbox writes share one transaction; the caller receives a result only after its proxy commits. */
 @Service
 public class RegistrationService {
 
@@ -60,27 +38,9 @@ public class RegistrationService {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * Registers the user, or recognizes a redelivery.
-     *
-     * <p>
-     * A {@code DuplicateKeyException} from an INSERT is deliberately NOT caught
-     * here: PostgreSQL has
-     * already marked this transaction as failed, so no further statement can run on
-     * it (design section 5:
-     * "do not continue using a transaction already marked for rollback"). The
-     * exception rolls the
-     * transaction back, and the listener then calls {@link #resolveDuplicate} in a
-     * fresh one.
-     */
+    /** A uniqueness failure must roll back here before the processor starts duplicate resolution. */
     @Transactional
-    public RegistrationOutcome register(RegisterUserCommand command) {
-        return registerWithResult(command).outcome();
-    }
-
-    /** Both public entry points have a transaction; the HTTP path also needs the stored user. */
-    @Transactional
-    public RegistrationResult registerWithResult(RegisterUserCommand command) {
+    public RegistrationResult register(RegisterUserCommand command) {
         Optional<User> existing = users.findByRegistrationId(command.registrationId());
         if (existing.isPresent()) {
             return outcomeForExisting(existing.get(), command);
@@ -101,24 +61,13 @@ public class RegistrationService {
         outbox.insert(new OutboxEvent(eventId, AGGREGATE_TYPE, user.id().toString(), EVENT_TYPE,
                 objectMapper.writeValueAsString(event), now));
 
-        log.info("registration committed registrationId={} userId={}", command.registrationId(), user.id());
+        log.info("registration prepared registrationId={} userId={}", command.registrationId(), user.id());
         return new RegistrationResult(RegistrationOutcome.CREATED, user);
     }
 
-    /**
-     * Called after {@link #register} failed on a uniqueness violation, in a new
-     * read-only transaction,
-     * to decide which rule was hit: a concurrent duplicate of the same registration
-     * (harmless), the same
-     * key with other data, or a second registration for an existing email.
-     */
+    /** Classifies a rolled-back uniqueness violation using a fresh read-only transaction. */
     @Transactional(readOnly = true)
-    public RegistrationOutcome resolveDuplicate(RegisterUserCommand command) {
-        return resolveDuplicateWithResult(command).outcome();
-    }
-
-    @Transactional(readOnly = true)
-    public RegistrationResult resolveDuplicateWithResult(RegisterUserCommand command) {
+    public RegistrationResult resolveDuplicate(RegisterUserCommand command) {
         Optional<User> existing = users.findByRegistrationId(command.registrationId());
         if (existing.isPresent()) {
             return outcomeForExisting(existing.get(), command);

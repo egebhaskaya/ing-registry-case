@@ -11,7 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * configuration, turns on
  * auto-configuration (Spring wires a database pool, a RabbitMQ connection, a
  * web server... based on
- * what is on the classpath and in application.yml), and scans this package and
+ * what is on the classpath and in application.properties), and scans this package and
  * everything below it
  * for components (controllers, services, repositories, listeners).
  *

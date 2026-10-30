@@ -1,6 +1,5 @@
-# Local Prometheus for the demonstration (docs/design.md section 8).
-# 5s scrape: short spikes between scrapes can still be missed, which is why k6's own measurements
-# and the end-of-run database counts are kept next to the graphs.
+# Prometheus samples both applications and RabbitMQ every five seconds.
+# Short spikes between samples can be missed; the dashboard shows sampled observations.
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
@@ -11,13 +10,6 @@ scrape_configs:
     metrics_path: /actuator/prometheus
     static_configs:
       - targets: ["host.docker.internal:8080"]
-
-  # Temporary synchronous-comparison process. Normally down between experiments;
-  # Grafana's Registry target selector keeps its metrics separate from the main service.
-  - job_name: registry-benchmark
-    metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ["host.docker.internal:8082"]
 
   - job_name: compliance
     metrics_path: /actuator/prometheus

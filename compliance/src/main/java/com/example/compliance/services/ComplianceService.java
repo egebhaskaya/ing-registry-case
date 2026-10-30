@@ -16,7 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
  * result are committed
  * together, before the Kafka offset is allowed to advance (the listener
  * container commits the offset
- * only after this method has returned, see application.yml
+ * only after this method has returned, see application.properties
  * {@code ack-mode: record}).
  *
  * <p>

@@ -4,7 +4,7 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
- * The {@code compliance.*} block of application.yml. Nested records bind the
+ * The {@code compliance.*} settings in application.properties. Nested records bind the
  * nested YAML blocks:
  * {@code compliance.kafka.topic} becomes {@code kafka().topic()}.
  *

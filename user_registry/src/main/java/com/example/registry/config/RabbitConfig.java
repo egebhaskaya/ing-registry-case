@@ -93,7 +93,8 @@ public class RabbitConfig {
      */
     @Bean
     MessageConverter jsonMessageConverter() {
-        return new JacksonJsonMessageConverter();
+        // Replies carry a type header; trust only this application's command/reply package.
+        return new JacksonJsonMessageConverter("com.example.registry.messaging");
     }
 
     /**
@@ -121,7 +122,7 @@ public class RabbitConfig {
      * Which failures are worth retrying. A permanent conflict is signalled by throwing
      * {@link AmqpRejectAndDontRequeueException}, and a message that cannot even be converted into a
      * command will not convert better the fourth time; both go straight to the recoverer. Everything else
-     * (connection timeouts, lock waits...) gets the backoff schedule from application.yml. Spring's retry
+     * (connection timeouts, lock waits...) gets the backoff schedule from application.properties. Spring's retry
      * policy matches the exception and its causes, so the wrapper the listener container adds around our
      * exception does not hide it.
      */
