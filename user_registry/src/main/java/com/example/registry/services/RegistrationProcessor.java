@@ -22,6 +22,7 @@ public class RegistrationProcessor {
     }
 
     public RegistrationResult process(RegisterUserCommand command) {
+        metrics.workerStarted();
         try {
             RegistrationResult result;
             try {
@@ -41,6 +42,8 @@ public class RegistrationProcessor {
         } catch (RuntimeException e) {
             metrics.registrationFailed();
             throw e;
+        } finally {
+            metrics.workerFinished();
         }
     }
 }

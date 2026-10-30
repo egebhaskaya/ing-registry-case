@@ -5,13 +5,18 @@ import static org.awaitility.Awaitility.await;
 
 import com.example.registry.dtos.RegistrationRequest;
 import com.example.registry.repositories.UserRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
+import org.springframework.boot.amqp.autoconfigure.RabbitProperties;
+import org.springframework.boot.thread.Threading;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
@@ -28,6 +33,9 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
 
     @Autowired RestTestClient client;
     @Autowired UserRepository users;
+    @Autowired RabbitProperties rabbitProperties;
+    @Autowired Environment environment;
+    @Autowired MeterRegistry meters;
 
     @BeforeEach
     void cleanDatabase() {
@@ -36,6 +44,12 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
 
     @Test
     void exposesRegistrationMetricsOnThePrometheusEndpoint() {
+        Timer async = singleSuccessTimer("/registrations", "202");
+        Timer created = singleSuccessTimer("/registrations/sync", "201");
+        Timer replayed = singleSuccessTimer("/registrations/sync", "200");
+        assertThat(async.count()).isZero();
+        assertThat(created.count()).isZero();
+        assertThat(replayed.count()).isZero();
         UUID key = UUID.randomUUID();
         client.post().uri("/registrations")
                 .header("Idempotency-Key", key.toString())
@@ -44,6 +58,25 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .exchange()
                 .expectStatus().isAccepted();
         await().atMost(Duration.ofSeconds(10)).until(() -> users.count() == 1);
+
+        UUID syncKey = UUID.randomUUID();
+        RegistrationRequest syncRequest = new RegistrationRequest("Grace Hopper", "metrics-" + syncKey + "@example.com", "NL");
+        client.post().uri("/registrations/sync")
+                .header("Idempotency-Key", syncKey.toString())
+                .contentType(MediaType.APPLICATION_JSON).body(syncRequest)
+                .exchange().expectStatus().isCreated();
+        client.post().uri("/registrations/sync")
+                .header("Idempotency-Key", syncKey.toString())
+                .contentType(MediaType.APPLICATION_JSON).body(syncRequest)
+                .exchange().expectStatus().isOk();
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+            assertThat(singleSuccessTimer("/registrations", "202")).isSameAs(async);
+            assertThat(singleSuccessTimer("/registrations/sync", "201")).isSameAs(created);
+            assertThat(singleSuccessTimer("/registrations/sync", "200")).isSameAs(replayed);
+            assertThat(async.count()).isEqualTo(1);
+            assertThat(created.count()).isEqualTo(1);
+            assertThat(replayed.count()).isEqualTo(1);
+        });
 
         String metrics = client.get().uri("/actuator/prometheus")
                 .exchange()
@@ -58,12 +91,22 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .contains("registry_registrations_total{application=\"registry-service\",outcome=\"created\"}")
                 .contains("registry_registration_completion_seconds_bucket")
                 // configuration and runtime gauges for the dashboard's context row
-                .contains("registry_config_consumers{application=\"registry-service\"} 4.0")
-                .contains("registry_config_prefetch{application=\"registry-service\"} 8.0")
-                .contains("registry_threads_virtual_enabled{application=\"registry-service\"} 1.0")
+                .contains("registry_config_consumers{application=\"registry-service\"} "
+                        + rabbitProperties.getListener().getSimple().getConcurrency().doubleValue())
+                .contains("registry_config_prefetch{application=\"registry-service\"} "
+                        + rabbitProperties.getListener().getSimple().getPrefetch().doubleValue())
+                .contains("registry_threads_virtual_enabled{application=\"registry-service\"} "
+                        + (Threading.VIRTUAL.isActive(environment) ? "1.0" : "0.0"))
+                .contains("registry_workers_active{application=\"registry-service\"}")
                 // built-in series the dashboard also relies on
                 .contains("http_server_requests_seconds_bucket{")
                 .contains("hikaricp_connections_max{")
                 .contains("jvm_info{");
+    }
+
+    private Timer singleSuccessTimer(String uri, String status) {
+        var matching = meters.find("http.server.requests").tags("method", "POST", "uri", uri, "status", status).timers();
+        assertThat(matching).as("one actual HTTP timer for %s %s", uri, status).hasSize(1);
+        return matching.iterator().next();
     }
 }

@@ -2,7 +2,7 @@
 
 1. Start Docker, then run `make up` from the repository root.
 2. Run `make registry` and `make compliance` in separate terminals.
-3. Open [Registration Case](http://localhost:3000/d/registration-case): Last 15 minutes, refresh 5s.
+3. Open [Registration Case](http://localhost:3000/d/registration-case): Last 5 minutes, refresh 1s.
 4. Run `make k6`. Watch HTTP acceptance, Rabbit backlog, Registry commits and Compliance catching up.
    Wait for the queue to drain before the next run.
 5. Run `make k6-sync`. HTTP success now follows the same worker's Registry commit. Compliance still

@@ -11,6 +11,7 @@ import com.example.registry.dtos.RegistrationRequest;
 import com.example.registry.models.OutboxEvent;
 import com.example.registry.repositories.OutboxRepository;
 import com.example.registry.repositories.UserRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -42,6 +43,7 @@ class SharedQueueRegistrationTest extends AbstractIntegrationTest {
     @Autowired AmqpAdmin admin;
     @Autowired RegistryRabbitProperties rabbit;
     @Autowired UserRepository users;
+    @Autowired MeterRegistry meters;
     @MockitoSpyBean OutboxRepository outbox;
 
     @BeforeEach
@@ -97,6 +99,7 @@ class SharedQueueRegistrationTest extends AbstractIntegrationTest {
                 assertThat(beforeCommit.await(2, TimeUnit.SECONDS)).isTrue();
                 assertThat(sync.isDone()).isFalse();
                 assertThat(users.findByRegistrationId(syncKey)).isEmpty();
+                assertThat(meters.get("registry.workers.active").gauge().value()).isGreaterThanOrEqualTo(1);
                 allowCommit.countDown();
 
                 Reply completed = sync.get(5, TimeUnit.SECONDS);
@@ -106,6 +109,8 @@ class SharedQueueRegistrationTest extends AbstractIntegrationTest {
                 await().atMost(Duration.ofSeconds(5)).until(() -> users.findByRegistrationId(asyncKey).isPresent());
                 assertThat(users.count()).isEqualTo(2);
                 assertThat(outbox.count()).isEqualTo(2);
+                await().atMost(Duration.ofSeconds(2))
+                        .until(() -> meters.get("registry.workers.active").gauge().value() == 0);
             } finally {
                 allowCommit.countDown();
                 listeners.start();

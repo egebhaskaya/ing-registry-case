@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureRestTestClient;
+import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.web.servlet.client.RestTestClient;
 import tools.jackson.databind.ObjectMapper;
@@ -31,6 +32,7 @@ class ComplianceMetricsTest extends AbstractIntegrationTest {
     @Autowired ComplianceProperties props;
     @Autowired ObjectMapper objectMapper;
     @Autowired ComplianceResultRepository results;
+    @Autowired KafkaProperties kafkaProperties;
 
     @BeforeEach
     void cleanDatabase() {
@@ -50,11 +52,14 @@ class ComplianceMetricsTest extends AbstractIntegrationTest {
                 .expectBody(String.class)
                 .returnResult()
                 .getResponseBody();
+        Integer configuredConcurrency = kafkaProperties.getListener().getConcurrency();
 
         assertThat(metrics)
                 .contains("compliance_events_total{application=\"compliance-service\",outcome=\"processed\"}")
                 .contains("compliance_completion_seconds_bucket")
-                .contains("compliance_config_concurrency{application=\"compliance-service\"} 1.0")
+                .contains("compliance_config_concurrency{application=\"compliance-service\"} "
+                        + (configuredConcurrency == null ? 1 : configuredConcurrency) + ".0")
+                .contains("compliance_workers_active{application=\"compliance-service\"}")
                 .contains("jvm_info{");
     }
 }

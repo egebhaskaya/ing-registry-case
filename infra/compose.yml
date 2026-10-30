@@ -5,7 +5,7 @@
 #   rabbitmq     command queue between the Registry API and its consumers; management UI + Prometheus plugin
 #   kafka        single-node KRaft broker carrying the UserRegistered events
 #   connect      Debezium Kafka Connect: reads committed outbox rows from PostgreSQL and publishes them
-#   prometheus   scrapes both applications (on the host) and RabbitMQ every 5 seconds
+#   prometheus   scrapes both applications (on the host) and RabbitMQ every second
 #   grafana      one provisioned dashboard on top of Prometheus; no login, no internet access needed
 #
 # Profile "init" (one-shot containers, run after the stack is healthy; safe to repeat):
@@ -170,6 +170,8 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      # Short local load bursts need one-second dashboard refreshes.
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: "1s"
       # Offline: no update checks, usage reporting or news feed (design section 3).
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"

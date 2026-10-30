@@ -1,8 +1,9 @@
-# Prometheus samples both applications and RabbitMQ every five seconds.
+# Prometheus samples both applications and RabbitMQ every second for the local demonstration.
 # Short spikes between samples can be missed; the dashboard shows sampled observations.
 global:
-  scrape_interval: 5s
-  evaluation_interval: 5s
+  scrape_interval: 1s
+  scrape_timeout: 1s
+  evaluation_interval: 1s
 
 scrape_configs:
   # The two applications run on the host (mvnw spring-boot:run or java -jar), not in compose.

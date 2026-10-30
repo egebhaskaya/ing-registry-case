@@ -1,8 +1,11 @@
 package com.example.compliance.config;
 
+import com.example.compliance.services.ComplianceOutcome;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.boot.kafka.autoconfigure.KafkaProperties;
 import org.springframework.stereotype.Component;
 
@@ -15,9 +18,18 @@ import org.springframework.stereotype.Component;
 public class ComplianceMetrics {
 
     private final MeterRegistry registry;
+    private final AtomicInteger activeWorkers = new AtomicInteger();
 
     public ComplianceMetrics(MeterRegistry registry, KafkaProperties kafkaProperties) {
         this.registry = registry;
+        for (ComplianceOutcome outcome : ComplianceOutcome.values()) {
+            registry.counter("compliance.events", "outcome", outcome.name().toLowerCase(Locale.ROOT));
+        }
+        registry.counter("compliance.events.dead_lettered");
+        registry.timer("compliance.completion");
+        Gauge.builder("compliance.workers.active", activeWorkers, AtomicInteger::get)
+                .description("In-progress listener invocations, including parsing and database waits; not CPU threads")
+                .register(registry);
         Integer concurrency = kafkaProperties.getListener().getConcurrency();
         Gauge.builder("compliance.config.concurrency", () -> concurrency == null ? 1 : concurrency)
                 .description("Configured Kafka listener concurrency (at most one useful consumer per partition)")
@@ -37,5 +49,13 @@ public class ComplianceMetrics {
     /** From the API accepting the request (submittedAt) to the compliance result commit: the whole pipeline. */
     public void completion(Duration duration) {
         registry.timer("compliance.completion").record(duration);
+    }
+
+    public void workerStarted() {
+        activeWorkers.incrementAndGet();
+    }
+
+    public void workerFinished() {
+        activeWorkers.decrementAndGet();
     }
 }

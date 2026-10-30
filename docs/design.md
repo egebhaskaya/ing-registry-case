@@ -15,7 +15,7 @@ A small Java 25 / Spring Boot case for exploring queues, connection limits and v
 - **Bounded resources:** HTTP intake, queue depth, workers, connections, retries and sync waits have
   finite limits. Virtual threads change waiting cost, not these limits.
 - **One dashboard:** settings, four graphs (speed, backlog, pool, latency), and small progress/error
-  summaries. Five-second samples can miss short events; database counts verify durable effects.
+  summaries. One-second samples can miss short events; database counts verify durable effects.
 - **One load-test scenario:** `make k6` and `make k6-sync` each send 10,000 requests with the same
   closed-loop client model. Correctness tests cover rollback, duplicates, redelivery and failures.
 

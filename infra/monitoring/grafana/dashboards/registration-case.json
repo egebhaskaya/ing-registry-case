@@ -1,18 +1,18 @@
 {
   "uid": "registration-case",
   "title": "Registration Case",
-  "description": "One shared RabbitMQ pipeline for async and sync registrations. Five-second samples; throughput is averaged over 30 seconds and p95 is estimated from histogram buckets over one minute. Progress and error counters belong to each service process and reset independently on restart.",
+  "description": "One shared RabbitMQ pipeline for async and sync registrations. One-second samples and refresh; server decision and processing rates use 10-second windows. Histogram p95 estimates use 30-second windows, with HTTP on the right millisecond axis and completion on the left second axis. Lifetime counters reset independently on each service restart.",
   "tags": [
     "registration-case"
   ],
   "timezone": "browser",
   "editable": true,
   "graphTooltip": 1,
-  "refresh": "5s",
+  "refresh": "1s",
   "schemaVersion": 39,
-  "version": 4,
+  "version": 6,
   "time": {
-    "from": "now-15m",
+    "from": "now-5m",
     "to": "now"
   },
   "templating": {
@@ -25,8 +25,8 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "Configuration",
-      "description": "The Registry consumes both async and sync requests from the same RabbitMQ queue. Prefetch limits unacknowledged deliveries per consumer. The pool maximum caps Registry database connections. Virtual threads reports the Registry thread mode. Compliance has at most four useful consumers for its four partitions.",
+      "title": "Configuration and current activity",
+      "description": "Configured limits are not measured busy workers. Both HTTP routes use the same Registry consumers. Prefetch limits unacknowledged deliveries per consumer; the pool maximum caps Registry database connections. Virtual threads reports Registry thread mode. Useful Compliance concurrency is limited by the event topic's actual partition count. Compliance busy now is measured work in progress, including database waiting, and can remain nonzero after Registry has finished.",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -66,6 +66,12 @@
           "refId": "E",
           "expr": "(max(compliance_config_concurrency{job=\"compliance\",application=\"compliance-service\"})) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance consumers",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "expr": "(sum(compliance_workers_active{job=\"compliance\",application=\"compliance-service\"})) and on() (max(up{job=\"compliance\"}) == 1)",
+          "legendFormat": "Compliance busy now",
           "instant": true
         }
       ],
@@ -123,13 +129,13 @@
     {
       "id": 2,
       "type": "timeseries",
-      "title": "Throughput",
-      "description": "Events per second averaged over 30 seconds. HTTP successes include async 202 receipts and sync 201 creations or 200 replays. Registry creations count committed new users; Compliance checks count committed results. These stages can finish at different times.",
+      "title": "Server decisions and processing /s",
+      "description": "Ten-second rate estimates from application counters sampled every second, not exact k6 burst throughput. Async accepted decisions follow broker confirmation. Sync completed decisions follow a committed worker result and include replays. Registry creations and Compliance checks count new committed results. These stages can finish at different times.",
       "gridPos": {
         "x": 0,
         "y": 3,
         "w": 12,
-        "h": 9
+        "h": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -138,19 +144,25 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync)?\",method=\"POST\",status=~\"200|201|202\"}[30s]))) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "HTTP successes",
+          "expr": "(sum(rate(registry_intake_requests_total{job=\"registry\",application=\"registry-service\",outcome=\"accepted\"}[10s]))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Async accepted decisions",
           "instant": false
         },
         {
           "refId": "B",
-          "expr": "((sum(rate(registry_registrations_total{job=\"registry\",application=\"registry-service\",outcome=\"created\"}[30s]))) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Registry creations",
+          "expr": "(sum(rate(registry_sync_requests_total{job=\"registry\",application=\"registry-service\",outcome=~\"created|replayed\"}[10s]))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Sync completed decisions",
           "instant": false
         },
         {
           "refId": "C",
-          "expr": "((sum(rate(compliance_events_total{job=\"compliance\",application=\"compliance-service\",outcome=\"processed\"}[30s]))) or on() vector(0)) and on() (max(up{job=\"compliance\"}) == 1)",
+          "expr": "(sum(rate(registry_registrations_total{job=\"registry\",application=\"registry-service\",outcome=\"created\"}[10s]))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Registry creations",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "(sum(rate(compliance_events_total{job=\"compliance\",application=\"compliance-service\",outcome=\"processed\"}[10s]))) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance checks",
           "instant": false
         }
@@ -176,26 +188,30 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "1s"
     },
     {
       "id": 3,
       "type": "timeseries",
       "title": "RabbitMQ queue",
-      "description": "Messages in the shared registration.commands queue. Ready messages wait at the broker. Unacknowledged includes work being processed and prefetched deliveries waiting at consumers. The queue is drained when both reach zero.",
+      "description": "Sampled messages in the shared registration.commands queue. Ready messages wait at the broker. Unacknowledged includes processing and prefetched deliveries waiting at consumers, so it is not a busy-worker count. Both must reach zero to drain. Missing queue metrics remain a gap rather than an invented zero. Legend maxima are observed samples and can miss shorter peaks.",
       "gridPos": {
         "x": 12,
         "y": 3,
         "w": 12,
-        "h": 9
+        "h": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -204,13 +220,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "((sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands\"})) or on() vector(0)) and on() (max(up{job=\"rabbitmq\"}) == 1)",
+          "expr": "(sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
           "legendFormat": "Ready at broker",
           "instant": false
         },
         {
           "refId": "B",
-          "expr": "((sum(rabbitmq_queue_messages_unacked{job=\"rabbitmq\",queue=\"registration.commands\"})) or on() vector(0)) and on() (max(up{job=\"rabbitmq\"}) == 1)",
+          "expr": "(sum(rabbitmq_queue_messages_unacked{job=\"rabbitmq\",queue=\"registration.commands\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
           "legendFormat": "Unacknowledged",
           "instant": false
         }
@@ -236,26 +252,30 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "1s"
     },
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Registry database pool",
-      "description": "Connections sampled every five seconds. Active connections are borrowed by transactions; pending callers wait for a connection. Short waits between samples may be missed. More consumers do not increase the pool maximum.",
+      "title": "Registry workers and database pool",
+      "description": "One-second samples. Workers in progress are executing a command, including time waiting for a database connection. Active connections are borrowed from Hikari; pending callers wait for one. Compare measured workers with connections to see the pool limit. Counts are not CPU parallelism. Short activity between samples can still be missed.",
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 15,
         "w": 12,
-        "h": 9
+        "h": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -264,20 +284,26 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(hikaricp_connections_active{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Active connections",
+          "expr": "(sum(registry_workers_active{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Workers in progress (includes waiting)",
           "instant": false
         },
         {
           "refId": "B",
-          "expr": "(sum(hikaricp_connections_max{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Pool maximum",
+          "expr": "(sum(hikaricp_connections_active{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Active DB connections",
           "instant": false
         },
         {
           "refId": "C",
           "expr": "(sum(hikaricp_connections_pending{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Waiting for connection",
+          "legendFormat": "Waiting for DB connection",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "(sum(hikaricp_connections_max{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Pool maximum",
           "instant": false
         }
       ],
@@ -325,26 +351,30 @@
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "1s"
     },
     {
       "id": 5,
       "type": "timeseries",
-      "title": "p95 response and completion time",
-      "description": "Time is measured in seconds; small values display as milliseconds. HTTP async ends after broker confirmation. HTTP sync includes waiting for the Registry commit reply. Registry completion includes queue waiting through user/outbox commit. Compliance completion covers the full pipeline. These are histogram estimates over one minute; no observations means no latency value.",
+      "title": "p95 HTTP response and pipeline completion",
+      "description": "Thirty-second histogram estimates. Left axis: Registry and Compliance completion in seconds, including queue waiting. Right axis: successful HTTP response time in milliseconds; async ends after broker confirmation and sync after the Registry commit reply. The axes have different scales. Empty observation windows remain gaps. Estimates can blend nearby runs and differ from exact per-run k6 response measurements.",
       "gridPos": {
         "x": 12,
-        "y": 12,
+        "y": 15,
         "w": 12,
-        "h": 9
+        "h": 12
       },
       "datasource": {
         "type": "prometheus",
@@ -353,25 +383,25 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations\",method=\"POST\",status=\"202\"}[1m])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations\",method=\"POST\",status=\"202\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "HTTP async (202)",
           "instant": false
         },
         {
           "refId": "B",
-          "expr": "(histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations/sync\",method=\"POST\",status=~\"200|201\"}[1m])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations/sync\",method=\"POST\",status=~\"200|201\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "HTTP sync (200/201)",
           "instant": false
         },
         {
           "refId": "C",
-          "expr": "(histogram_quantile(0.95, sum by (le) (rate(registry_registration_completion_seconds_bucket{job=\"registry\",application=\"registry-service\"}[1m])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(registry_registration_completion_seconds_bucket{job=\"registry\",application=\"registry-service\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "Registry completion",
           "instant": false
         },
         {
           "refId": "D",
-          "expr": "(histogram_quantile(0.95, sum by (le) (rate(compliance_completion_seconds_bucket{job=\"compliance\",application=\"compliance-service\"}[1m])))) and on() (max(up{job=\"compliance\"}) == 1)",
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(compliance_completion_seconds_bucket{job=\"compliance\",application=\"compliance-service\"}[30s])))) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance completion",
           "instant": false
         }
@@ -390,31 +420,78 @@
             "fillOpacity": 3,
             "showPoints": "never",
             "spanNulls": false,
-            "axisCenteredZero": false
+            "axisCenteredZero": false,
+            "axisPlacement": "left",
+            "axisLabel": "Completion (seconds)"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP async (202)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "HTTP response (milliseconds)"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "HTTP sync (200/201)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "HTTP response (milliseconds)"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
-          "calcs": []
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      }
+      },
+      "interval": "1s"
     },
     {
       "id": 6,
       "type": "stat",
       "title": "Progress since each service started",
-      "description": "Current process counters, not totals for the selected time range or an exact per-run ledger. Registry and Compliance reset independently on restart. HTTP successes include replay responses, so the values need not match. An absent counter is zero only while its service is being scraped successfully; unavailable telemetry remains No data.",
+      "description": "Application decision and result counters since each service process started, not totals for the selected range or an exact per-run ledger. Async accepted and sync completed are server decisions; sync includes replay responses. Registry creations count new users, while Compliance checks count new results. Services reset independently on restart, so these values need not match. Use the HTML k6 report for a specific run.",
       "gridPos": {
         "x": 0,
-        "y": 21,
+        "y": 27,
         "w": 12,
         "h": 4
       },
@@ -425,19 +502,25 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "((sum(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync)?\",method=\"POST\",status=~\"200|201|202\"})) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "HTTP successes",
+          "expr": "(sum(registry_intake_requests_total{job=\"registry\",application=\"registry-service\",outcome=\"accepted\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Async accepted",
           "instant": true
         },
         {
           "refId": "B",
-          "expr": "((sum(registry_registrations_total{job=\"registry\",application=\"registry-service\",outcome=\"created\"})) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Registry creations",
+          "expr": "(sum(registry_sync_requests_total{job=\"registry\",application=\"registry-service\",outcome=~\"created|replayed\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Sync completed",
           "instant": true
         },
         {
           "refId": "C",
-          "expr": "((sum(compliance_events_total{job=\"compliance\",application=\"compliance-service\",outcome=\"processed\"})) or on() vector(0)) and on() (max(up{job=\"compliance\"}) == 1)",
+          "expr": "(sum(registry_registrations_total{job=\"registry\",application=\"registry-service\",outcome=\"created\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Registry creations",
+          "instant": true
+        },
+        {
+          "refId": "D",
+          "expr": "(sum(compliance_events_total{job=\"compliance\",application=\"compliance-service\",outcome=\"processed\"})) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance checks",
           "instant": true
         }
@@ -472,10 +555,10 @@
       "id": 7,
       "type": "stat",
       "title": "Errors since each service started",
-      "description": "HTTP 4xx/5xx includes validation errors, conflicts and 503 responses; a timeout can have an unknown outcome. Failed attempts can be retried. Dead-letter values count publishes by the current Registry/Compliance process, not queue depth. Counters reset independently. An absent counter is zero only while its service is UP; missing telemetry remains No data.",
+      "description": "Counters since each service started. HTTP 4xx/5xx includes validation errors, conflicts and 503 responses; a timeout can have an unknown outcome. Failed attempts can be retried. Dead-letter values count publishes, not current queue depth. Services reset independently. An absent HTTP error counter is zero only while Registry is UP; unavailable telemetry remains No data.",
       "gridPos": {
         "x": 12,
-        "y": 21,
+        "y": 27,
         "w": 12,
         "h": 4
       },
@@ -492,19 +575,19 @@
         },
         {
           "refId": "B",
-          "expr": "((sum(registry_registrations_failures_total{job=\"registry\",application=\"registry-service\"})) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "(sum(registry_registrations_failures_total{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "Registry failed attempts",
           "instant": true
         },
         {
           "refId": "C",
-          "expr": "((sum(registry_registrations_dead_lettered_total{job=\"registry\",application=\"registry-service\"})) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "(sum(registry_registrations_dead_lettered_total{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "Registry dead letters",
           "instant": true
         },
         {
           "refId": "D",
-          "expr": "((sum(compliance_events_dead_lettered_total{job=\"compliance\",application=\"compliance-service\"})) or on() vector(0)) and on() (max(up{job=\"compliance\"}) == 1)",
+          "expr": "(sum(compliance_events_dead_lettered_total{job=\"compliance\",application=\"compliance-service\"})) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance dead letters",
           "instant": true
         }
@@ -535,5 +618,15 @@
         "wideLayout": true
       }
     }
-  ]
+  ],
+  "timepicker": {
+    "refresh_intervals": [
+      "1s",
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m"
+    ]
+  }
 }

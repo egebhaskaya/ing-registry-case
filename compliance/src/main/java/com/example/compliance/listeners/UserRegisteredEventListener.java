@@ -51,21 +51,25 @@ public class UserRegisteredEventListener {
 
     @KafkaListener(topics = "${compliance.kafka.topic}")
     public void onUserRegistered(ConsumerRecord<String, String> record) {
-        if (record.value() == null) {
-            // A tombstone (null value) carries no event. Debezium is configured not to emit them, but
-            // acknowledging one is the right answer anyway: retrying or dead-lettering it helps nobody.
-            log.warn("skipping tombstone record partition={} offset={}", record.partition(), record.offset());
-            return;
-        }
-        UserRegisteredEvent event = objectMapper.readValue(record.value(), UserRegisteredEvent.class);
+        metrics.workerStarted();
+        try {
+            if (record.value() == null) {
+                // Tombstones carry no event and can be acknowledged without business work.
+                log.warn("skipping tombstone record partition={} offset={}", record.partition(), record.offset());
+                return;
+            }
+            UserRegisteredEvent event = objectMapper.readValue(record.value(), UserRegisteredEvent.class);
 
-        ComplianceOutcome outcome = complianceService.process(event);
+            ComplianceOutcome outcome = complianceService.process(event);
 
-        metrics.event(outcome.name().toLowerCase(Locale.ROOT));
-        if (outcome == ComplianceOutcome.PROCESSED) {
-            metrics.completion(Duration.between(event.submittedAt(), Instant.now()));
+            metrics.event(outcome.name().toLowerCase(Locale.ROOT));
+            if (outcome == ComplianceOutcome.PROCESSED) {
+                metrics.completion(Duration.between(event.submittedAt(), Instant.now()));
+            }
+            log.info("compliance processed eventId={} registrationId={} outcome={} partition={} offset={}",
+                    event.eventId(), event.registrationId(), outcome, record.partition(), record.offset());
+        } finally {
+            metrics.workerFinished();
         }
-        log.info("compliance processed eventId={} registrationId={} outcome={} partition={} offset={}",
-                event.eventId(), event.registrationId(), outcome, record.partition(), record.offset());
     }
 }

@@ -79,18 +79,26 @@ processing; a `202` alone does not establish that the user or Compliance result 
 
 ## Watch one dashboard
 
-Open [Registration Case](http://localhost:3000/d/registration-case): **Last 15 minutes**, refresh **5s**.
+Open [Registration Case](http://localhost:3000/d/registration-case): **Last 5 minutes**, refresh **1s**.
 No login is required for this local demo. A settings strip shows workers, prefetch, pool maximum,
 virtual-thread mode and Compliance workers. Four graphs show:
 
-1. **Processing speed:** HTTP successes, Registry commits and Compliance completions per second.
-2. **RabbitMQ backlog:** ready messages and delivered-but-unfinished (`unacked`) messages.
-3. **Database connections:** active connections, maximum and workers waiting for one.
-4. **Response and completion p95:** HTTP response and end-to-end Registry/Compliance times.
+1. **Processing speed:** async acceptance, sync completion decisions, Registry commits and Compliance
+   completions per second, averaged over 10 seconds. These are server decisions; k6 records client responses.
+2. **RabbitMQ backlog:** ready messages and delivered-but-unfinished (`unacked`) messages, with current
+   and peak values in the legend. Missing queue telemetry stays missing instead of looking empty.
+3. **Workers and database:** registrations in progress, borrowed connections, pool maximum and callers
+   waiting for a connection. In-progress workers include database waiting; this is not CPU parallelism.
+4. **Response and completion p95:** HTTP milliseconds on the right axis and end-to-end completion
+   seconds on the left, estimated from histogram buckets over 30 seconds.
 
 Small summaries show progress and errors. Service counters reset when that service restarts; they
-are not authoritative per-run totals. Samples every five seconds can miss short spikes. Both ready
-and unacked must reach zero for the Rabbit queue to be fully drained.
+are not authoritative per-run totals. Application counters and completion timers exist from startup,
+including their zero baseline. One-second samples can still miss shorter spikes; use the HTML report
+for exact k6 counts and HTTP statistics. Both ready and unacked must reach zero for the Rabbit queue
+to be fully drained. A missing latency estimate means no observations in that window, not zero latency.
+Before the first load burst after startup, let the dashboard load its configuration and initial zero
+samples. This gives rate calculations a baseline before requests arrive.
 
 For example, increase workers from 4 to 16 with pool 4. Watch connection waiting and throughput.
 Next keep workers fixed and change the pool. Change one setting at a time and repeat measurements;
