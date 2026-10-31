@@ -4,6 +4,9 @@ import com.example.registry.config.RegistryRabbitProperties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.core.MessageBuilder;
+import org.springframework.amqp.core.MessageDeliveryMode;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Component;
@@ -20,8 +23,22 @@ public class RegistrationCommandPublisher {
     }
 
     public PublishOutcome publish(RegisterUserCommand command) {
+        return publish(command, props.routingKey());
+    }
+
+    public PublishOutcome publish(RegisterUserCommand command, String routingKey) {
         CorrelationData correlation = new CorrelationData();
-        rabbitTemplate.convertAndSend(props.exchange(), props.routingKey(), command, correlation);
+        rabbitTemplate.convertAndSend(props.exchange(), routingKey, command, correlation);
+        return outcome(correlation);
+    }
+
+    /** Failed batch items use the existing single-message retry and DLQ path, retaining their headers. */
+    public PublishOutcome retryIndividually(Message message) {
+        CorrelationData correlation = new CorrelationData();
+        // Received delivery mode is a separate property; restore persistence on the outgoing copy.
+        Message retry = MessageBuilder.fromMessage(message)
+                .setDeliveryMode(MessageDeliveryMode.PERSISTENT).build();
+        rabbitTemplate.send(props.exchange(), props.routingKey(), retry, correlation);
         return outcome(correlation);
     }
 

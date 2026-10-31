@@ -21,6 +21,7 @@ class RegistryMetricsInitializationTest {
             for (String outcome : List.of("accepted", "overloaded", "broker_rejected", "unroutable",
                     "broker_unavailable", "confirm_timeout")) {
                 assertZero(registry, "registry.intake.requests", outcome);
+                assertZero(registry, "registry.batch.intake.requests", outcome);
             }
             for (String outcome : List.of("created", "replayed", "conflict", "overloaded", "failed")) {
                 assertZero(registry, "registry.sync.requests", outcome);
@@ -35,15 +36,15 @@ class RegistryMetricsInitializationTest {
             assertThat(completion.count()).isZero();
             assertThat(completion.totalTime(TimeUnit.SECONDS)).isZero();
             var processing = registry.find("registry.registration.processing").timers();
-            assertThat(processing).hasSize(2);
-            for (String mode : List.of("sync", "async")) {
+            assertThat(processing).hasSize(3);
+            for (String mode : List.of("sync", "async", "batched")) {
                 var timer = registry.find("registry.registration.processing").tag("mode", mode).timer();
                 assertThat(timer).as("processing timer for %s", mode).isNotNull();
                 assertThat(timer.count()).isZero();
                 assertThat(timer.totalTime(TimeUnit.SECONDS)).isZero();
             }
             var httpSuccessTimers = registry.find("http.server.requests").timers();
-            assertThat(httpSuccessTimers).hasSize(3).allSatisfy(timer -> {
+            assertThat(httpSuccessTimers).hasSize(4).allSatisfy(timer -> {
                 assertThat(timer.count()).isZero();
                 assertThat(timer.totalTime(TimeUnit.SECONDS)).isZero();
             });

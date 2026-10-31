@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 
 import com.example.registry.config.IntakeProperties;
 import com.example.registry.config.RegistryMetrics;
+import com.example.registry.config.RegistryBatchProperties;
 import com.example.registry.dtos.RegistrationAcceptedResponse;
 import com.example.registry.dtos.RegistrationRequest;
 import com.example.registry.exceptions.ConflictingPayloadException;
@@ -234,7 +235,9 @@ class RegistrationRequestServiceTest {
 
     private RegistrationRequestService newService(IntakeProperties props) {
         RegistryMetrics metrics = new RegistryMetrics(meterRegistry, new RabbitProperties(), new MockEnvironment());
-        return new RegistrationRequestService(new RegistrationNormalizer(), publisher, processor, props, metrics);
+        return new RegistrationRequestService(new RegistrationNormalizer(), publisher, processor, props, metrics,
+                new RegistryBatchProperties(100, Duration.ofMillis(100), "registration.commands.batched",
+                        "registration.register.batched"));
     }
 
     private static void assertNormalized(RegisterUserCommand command, UUID id) {

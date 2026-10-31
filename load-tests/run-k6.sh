@@ -5,6 +5,7 @@
 # Usage:  load-tests/run-k6.sh                         # 10,000 iterations, 50 VUs
 #         ITERATIONS=500 VUS=20 load-tests/run-k6.sh
 #         MODE=sync load-tests/run-k6.sh
+#         MODE=batched load-tests/run-k6.sh
 #         CONTINUOUS=1 RATE=100 load-tests/run-k6.sh  # steady arrivals until Ctrl+C
 # Application tuning comes from application.properties, never from this runner.
 # Output: results/<RUN_ID>.summary.json, the shared results/index.html, and a terminal summary.
@@ -46,7 +47,7 @@ JS
   exit "$status"
 }
 export MODE="${MODE:-async}"
-case "$MODE" in async|sync) ;; *) echo "MODE must be async or sync"; exit 2 ;; esac
+case "$MODE" in async|sync|batched) ;; *) echo "MODE must be async, sync or batched"; exit 2 ;; esac
 export CONTINUOUS="${CONTINUOUS:-0}"
 case "$CONTINUOUS" in 0|1) ;; *) echo "CONTINUOUS must be 0 or 1"; exit 2 ;; esac
 export RUN_ID="${RUN_ID:-$MODE-$(date +%Y%m%d-%H%M%S-%N)-$RANDOM}"

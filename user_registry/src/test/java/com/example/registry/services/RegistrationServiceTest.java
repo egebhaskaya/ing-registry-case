@@ -3,8 +3,14 @@ package com.example.registry.services;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import com.example.registry.AbstractIntegrationTest;
 import com.example.registry.exceptions.ConflictingPayloadException;
@@ -39,6 +45,8 @@ class RegistrationServiceTest extends AbstractIntegrationTest {
 
     @Autowired
     RegistrationService service;
+    @Autowired
+    RegistrationProcessor processor;
 
     /**
      * Spies wrap the real repositories: every call goes through to the database
@@ -190,6 +198,112 @@ class RegistrationServiceTest extends AbstractIntegrationTest {
                 .hasMessage("boom");
         // Design section 5: "roll back user and outbox together".
         assertThat(users.count()).isZero();
+    }
+
+    @Test
+    void jdbcBatchPreservesStoredAndInBatchReplaysWithOneOutboxPerNewUser() {
+        RegisterUserCommand stored = command(UUID.randomUUID(), "Stored User", "stored@example.com");
+        service.register(stored);
+        RegisterUserCommand first = command(UUID.randomUUID(), "First User", "first@example.com");
+        RegisterUserCommand second = command(UUID.randomUUID(), "Second User", "second@example.com");
+        List<RegisterUserCommand> batch = List.of(stored, first, first, second);
+        clearInvocations(users, outbox);
+
+        List<RegistrationResult> results = service.registerBatch(batch);
+
+        verify(users).findByRegistrationIds(anyCollection());
+        verify(users, never()).findByRegistrationId(any());
+        verify(users).insertBatch(anyList());
+        verify(outbox).insertBatch(anyList());
+        assertThat(results).extracting(RegistrationResult::outcome).containsExactly(
+                RegistrationOutcome.DUPLICATE_IGNORED, RegistrationOutcome.CREATED,
+                RegistrationOutcome.DUPLICATE_IGNORED, RegistrationOutcome.CREATED);
+        assertThat(results.get(1).user()).isEqualTo(results.get(2).user());
+        assertThat(users.count()).isEqualTo(3);
+        assertThat(outbox.count()).isEqualTo(3);
+        for (int index : new int[] { 1, 3 }) {
+            User user = results.get(index).user();
+            assertThat(users.findByRegistrationId(batch.get(index).registrationId())).contains(user);
+            assertThat(outbox.findAll()).filteredOn(event -> event.aggregateId().equals(user.id().toString()))
+                    .singleElement().satisfies(event -> assertThat(event.payload())
+                            .contains(user.registrationId().toString()).contains(event.id().toString()));
+        }
+
+        assertThat(service.registerBatch(batch)).extracting(RegistrationResult::outcome)
+                .containsOnly(RegistrationOutcome.DUPLICATE_IGNORED);
+        assertThat(users.count()).isEqualTo(3);
+        assertThat(outbox.count()).isEqualTo(3);
+    }
+
+    @Test
+    void technicalFailureAfterBothJdbcBatchesRollsBackEverythingBeforeRetry() {
+        List<RegisterUserCommand> batch = List.of(
+                command(UUID.randomUUID(), "First User", "first@example.com"),
+                command(UUID.randomUUID(), "Second User", "second@example.com"));
+        doAnswer(invocation -> {
+            invocation.callRealMethod();
+            throw new IllegalStateException("outbox batch unavailable");
+        }).when(outbox).insertBatch(anyList());
+
+        assertThatThrownBy(() -> processor.processBatch(batch)).isInstanceOf(IllegalStateException.class)
+                .hasMessage("outbox batch unavailable");
+
+        assertThat(users.count()).isZero();
+        assertThat(outbox.count()).isZero();
+        verify(users, never()).insert(any());
+        doCallRealMethod().when(outbox).insertBatch(anyList());
+
+        assertThat(processor.processBatch(batch)).isEmpty();
+        assertThat(users.count()).isEqualTo(2);
+        assertThat(outbox.count()).isEqualTo(2);
+    }
+
+    @Test
+    void emailConflictRollsBackTheBulkWriteThenIsolatesOnlyTheBadItem() {
+        RegisterUserCommand first = command(UUID.randomUUID(), "First User", "shared@example.com");
+        RegisterUserCommand conflict = command(UUID.randomUUID(), "Conflicting User", "shared@example.com");
+        RegisterUserCommand second = command(UUID.randomUUID(), "Second User", "second@example.com");
+        List<RegisterUserCommand> batch = List.of(first, conflict, second);
+
+        assertThatThrownBy(() -> service.registerBatch(batch)).isInstanceOf(DuplicateKeyException.class);
+        assertThat(users.count()).isZero();
+        assertThat(outbox.count()).isZero();
+
+        List<RegistrationProcessor.BatchFailure> failures = processor.processBatch(batch);
+
+        assertThat(failures).singleElement().satisfies(failure -> {
+            assertThat(failure.index()).isEqualTo(1);
+            assertThat(failure.cause()).isInstanceOf(EmailAlreadyRegisteredException.class);
+        });
+        assertThat(users.findByRegistrationId(first.registrationId())).isPresent();
+        assertThat(users.findByRegistrationId(second.registrationId())).isPresent();
+        assertThat(users.findByRegistrationId(conflict.registrationId())).isEmpty();
+        assertThat(users.count()).isEqualTo(2);
+        assertThat(outbox.count()).isEqualTo(2);
+
+        assertThat(processor.processBatch(batch)).hasSize(1);
+        assertThat(users.count()).isEqualTo(2);
+        assertThat(outbox.count()).isEqualTo(2);
+    }
+
+    @Test
+    void conflictingIdInBatchDoesNotDiscardOtherValidRegistrations() {
+        RegisterUserCommand stored = command(UUID.randomUUID(), "Stored User", "stored@example.com");
+        service.register(stored);
+        RegisterUserCommand conflict = command(stored.registrationId(), "Changed User", "stored@example.com");
+        List<RegisterUserCommand> batch = List.of(
+                command(UUID.randomUUID(), "First User", "first@example.com"), conflict,
+                command(UUID.randomUUID(), "Second User", "second@example.com"));
+
+        List<RegistrationProcessor.BatchFailure> failures = processor.processBatch(batch);
+
+        assertThat(failures).singleElement().satisfies(failure -> {
+            assertThat(failure.index()).isEqualTo(1);
+            assertThat(failure.cause()).isInstanceOf(ConflictingPayloadException.class);
+        });
+        assertThat(users.findByRegistrationId(stored.registrationId()).orElseThrow().fullName()).isEqualTo("Stored User");
+        assertThat(users.count()).isEqualTo(3);
+        assertThat(outbox.count()).isEqualTo(3);
     }
 
     private RegisterUserCommand command(UUID registrationId, String fullName, String email) {

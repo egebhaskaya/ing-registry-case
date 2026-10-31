@@ -2,6 +2,7 @@ package com.example.registry.services;
 
 import com.example.registry.config.IntakeProperties;
 import com.example.registry.config.RegistryMetrics;
+import com.example.registry.config.RegistryBatchProperties;
 import com.example.registry.dtos.RegistrationAcceptedResponse;
 import com.example.registry.dtos.RegistrationRequest;
 import com.example.registry.exceptions.ConflictingPayloadException;
@@ -28,24 +29,38 @@ public class RegistrationRequestService {
     private final RegistrationProcessor processor;
     private final IntakeProperties props;
     private final RegistryMetrics metrics;
+    private final RegistryBatchProperties batching;
     private final Semaphore admission;
 
     public RegistrationRequestService(RegistrationNormalizer normalizer, RegistrationCommandPublisher publisher,
-            RegistrationProcessor processor, IntakeProperties props, RegistryMetrics metrics) {
+            RegistrationProcessor processor, IntakeProperties props, RegistryMetrics metrics,
+            RegistryBatchProperties batching) {
         this.normalizer = normalizer;
         this.publisher = publisher;
         this.processor = processor;
         this.props = props;
         this.metrics = metrics;
+        this.batching = batching;
         this.admission = new Semaphore(props.maxInFlight());
     }
 
     public RegistrationAcceptedResponse enqueue(UUID registrationId, RegistrationRequest request) {
+        return enqueue(registrationId, request, RegistrationMode.ASYNC);
+    }
+
+    public RegistrationAcceptedResponse enqueueBatched(UUID registrationId, RegistrationRequest request) {
+        return enqueue(registrationId, request, RegistrationMode.BATCHED);
+    }
+
+    private RegistrationAcceptedResponse enqueue(UUID registrationId, RegistrationRequest request, RegistrationMode mode) {
         try {
             return admitted(() -> {
-                switch (publisher.publish(command(registrationId, request))) {
+                RegisterUserCommand command = command(registrationId, request);
+                var published = mode == RegistrationMode.BATCHED
+                        ? publisher.publish(command, batching.routingKey()) : publisher.publish(command);
+                switch (published) {
                     case CONFIRMED -> {
-                        metrics.intake("accepted");
+                        metrics.intake(mode, "accepted");
                         return RegistrationAcceptedResponse.accepted(registrationId, Instant.now());
                     }
                     case REJECTED -> throw new IntakeRejectedException("broker_rejected");
@@ -55,16 +70,16 @@ public class RegistrationRequestService {
                 throw new IllegalStateException("Unreachable publisher outcome");
             });
         } catch (AmqpException e) {
-            metrics.intake("broker_unavailable");
+            metrics.intake(mode, "broker_unavailable");
             throw new IntakeRejectedException("broker_unavailable");
         } catch (IntakeOverloadedException e) {
-            metrics.intake("overloaded");
+            metrics.intake(mode, "overloaded");
             throw e;
         } catch (IntakeRejectedException e) {
-            metrics.intake(e.reason());
+            metrics.intake(mode, e.reason());
             throw e;
         } catch (IntakeOutcomeUnknownException e) {
-            metrics.intake(e.reason());
+            metrics.intake(mode, e.reason());
             throw e;
         }
     }

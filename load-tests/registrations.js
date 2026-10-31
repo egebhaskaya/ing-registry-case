@@ -1,6 +1,6 @@
 // One registration per iteration: a fixed 10,000-request burst by default, or a fixed arrival rate.
 // Continuous mode runs until Ctrl+C or its finite DURATION ceiling; dropped iterations remain visible.
-// MODE=async measures publisher-confirmed acceptance. MODE=sync measures commit before response.
+// MODE=async or batched measures publisher-confirmed acceptance. MODE=sync measures commit before response.
 // No retries: rejected requests stay visible in the primary benchmark.
 import http from 'k6/http';
 import { check } from 'k6';
@@ -12,8 +12,8 @@ const RUN_ID = __ENV.RUN_ID || `run-${Date.now()}`;
 const RUN_HEX = fnv1a32Hex(RUN_ID);
 const MODE = __ENV.MODE || 'async';
 const SUMMARY_DIR = __ENV.SUMMARY_DIR || '/results';
-if (MODE !== 'async' && MODE !== 'sync') throw new Error('MODE must be async or sync');
-const PATH = MODE === 'sync' ? '/registrations/sync' : '/registrations';
+if (!['async', 'sync', 'batched'].includes(MODE)) throw new Error('MODE must be async, sync or batched');
+const PATH = { async: '/registrations', sync: '/registrations/sync', batched: '/registrations/batched' }[MODE];
 const CONTINUOUS_FLAG = __ENV.CONTINUOUS === undefined ? '0' : __ENV.CONTINUOUS;
 if (CONTINUOUS_FLAG !== '0' && CONTINUOUS_FLAG !== '1') throw new Error('CONTINUOUS must be 0 or 1');
 const CONTINUOUS = CONTINUOUS_FLAG === '1';
@@ -77,7 +77,7 @@ export default function () {
     default: other.add(1);
   }
 
-  if (MODE === 'async') {
+  if (MODE !== 'sync') {
     if (check(res, { 'status is 202': (r) => r.status === 202 })) {
       successLatency.add(res.timings.duration);
     }

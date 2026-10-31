@@ -1,7 +1,8 @@
 package com.example.registry.services;
 
-/** Identifies the caller for processing metrics; both modes execute the same transaction. */
+/** Identifies how work enters processing; batched registrations share a database commit. */
 public enum RegistrationMode {
     SYNC,
-    ASYNC
+    ASYNC,
+    BATCHED
 }

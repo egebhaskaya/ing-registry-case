@@ -1,7 +1,8 @@
 # How /sync works
 
-Both routes use the same validation, command format, `RegistrationProcessor`, transaction and
-Compliance pipeline. Async queues its command in RabbitMQ; sync calls the processor directly.
+All three routes use the same validation, command format, registration rules and Compliance pipeline.
+Async queues its command in RabbitMQ; sync calls the processor directly. The third `/batched` route
+also queues one command per request, then groups commands into database transactions.
 
 ## Async: accepted and queued
 
@@ -27,15 +28,15 @@ reply address, reply queue or broker reply timeout. Sync database failures propa
 Rabbit retries. The thread may be virtual, but its JDBC operations still use a database connection.
 
 Sync success contains the committed user id, registration id, normalized data and `status=REGISTERED`.
-It does not establish that Compliance finished. After either Registry path commits, Debezium and
+It does not establish that Compliance finished. After any Registry path commits, Debezium and
 Kafka feed the same Compliance consumer independently.
 
 ## Admission and retries
 
-`registry.intake.max-in-flight=64` bounds admitted HTTP work across both routes. Async holds its slot
+`registry.intake.max-in-flight=64` bounds admitted HTTP work across all routes. Queued requests hold a slot
 until publisher confirmation; sync keeps it through processing and commit. A request that cannot
 acquire a slot within `registry.intake.admission-wait=200ms` returns `503` before publishing or writing.
-Rabbit consumer concurrency and prefetch apply only to async work. Sync has no separate worker pool;
+Rabbit consumer concurrency and prefetch apply only to queued work. Sync has no separate worker pool;
 its concurrency is limited by HTTP admission and database connection availability.
 
 If an HTTP response is lost after a commit, retry using the **same idempotency key and body**. An
@@ -57,7 +58,12 @@ registrations and excludes Rabbit queue waiting and downstream Compliance. Its e
 does not equalize HTTP and Rabbit worker concurrency. Wait for an earlier async backlog to drain before running sync for a
 clean comparison, because the two paths share database connections.
 
-For equal scheduled arrival rates, add `cont 200` to either command (replace 200 with your rate). k6 starts new
+`make k6-batched` adds queued group commits to this comparison. Its HTTP response still measures
+acceptance; successful bulk commits record the full group-processing duration for each new registration,
+excluding collection waiting. The batched line also includes individual fallback commits; commands
+forwarded to the ordinary retry queue can appear under async processing.
+
+For equal scheduled arrival rates, add `cont 200` to any of these commands (replace 200 with your rate). k6 starts new
 requests independently of prior response times, up to its configured VU capacity. Stop with Ctrl+C
-once; compare observed rates and dropped iterations as well as server metrics. Accepted async work
+once; compare observed rates and dropped iterations as well as server metrics. Accepted queued work
 can continue after the generator stops.

@@ -22,18 +22,18 @@ COMPLIANCE_MVN := compliance/mvnw -f compliance/pom.xml
 COUNT          ?= 50
 KAFKA_CLI      := MSYS_NO_PATHCONV=1 $(COMPOSE) exec kafka /opt/kafka/bin
 
-# Optional positional form: make k6 cont 200 (or make k6-sync cont 200).
+# Optional positional form: make k6 / k6-sync / k6-batched cont 200.
 # Only these exact three goals are accepted, before any recipes can run.
 K6_RUN_ENV :=
 ifneq ($(filter cont,$(MAKECMDGOALS)),)
   ifneq ($(words $(MAKECMDGOALS)),3)
-    $(error Usage: make k6 cont <requests-per-second> or make k6-sync cont <requests-per-second>)
+    $(error Usage: make <k6|k6-sync|k6-batched> cont <requests-per-second>)
   endif
-  ifeq ($(filter k6 k6-sync,$(word 1,$(MAKECMDGOALS))),)
-    $(error cont is only supported after k6 or k6-sync)
+  ifeq ($(filter k6 k6-sync k6-batched,$(word 1,$(MAKECMDGOALS))),)
+    $(error cont is only supported after k6, k6-sync or k6-batched)
   endif
   ifneq ($(word 2,$(MAKECMDGOALS)),cont)
-    $(error Usage: make k6 cont <requests-per-second> or make k6-sync cont <requests-per-second>)
+    $(error Usage: make <k6|k6-sync|k6-batched> cont <requests-per-second>)
   endif
   K6_RATE := $(word 3,$(MAKECMDGOALS))
   # Remove decimal digits without evaluating the argument in a shell.
@@ -117,6 +117,9 @@ k6: ## Async load: 10,000 requests; k6 cont <rate> runs until Ctrl+C
 k6-sync: ## Direct sync load: 10,000 requests; k6-sync cont <rate> runs until Ctrl+C
 	MODE=sync $(K6_RUN_ENV) bash load-tests/run-k6.sh
 
+k6-batched: ## Queued DB batches: 10,000 requests; k6-batched cont <rate> runs until Ctrl+C
+	MODE=batched $(K6_RUN_ENV) bash load-tests/run-k6.sh
+
 urls: ## Print the local URLs
 	@echo "Registry health     http://localhost:8080/actuator/health"
 	@echo "Compliance health   http://localhost:8081/actuator/health"
@@ -125,4 +128,4 @@ urls: ## Print the local URLs
 	@echo "Grafana             http://localhost:3000/d/registration-case"
 
 .PHONY: help check up down clean ps connector lag build test verify registry compliance register smoke k6 \
-        k6-sync urls
+        k6-sync k6-batched urls

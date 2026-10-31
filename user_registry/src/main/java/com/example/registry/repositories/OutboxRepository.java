@@ -20,6 +20,10 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class OutboxRepository {
 
+    private static final String INSERT_SQL =
+            "INSERT INTO outbox (id, aggregatetype, aggregateid, type, payload, created_at) "
+                    + "VALUES (?, ?, ?, ?, ?::jsonb, ?)";
+
     private static final RowMapper<OutboxEvent> ROW_MAPPER = (rs, rowNum) -> new OutboxEvent(
             rs.getObject("id", UUID.class),
             rs.getString("aggregatetype"),
@@ -39,11 +43,19 @@ public class OutboxRepository {
      * the database side.
      */
     public void insert(OutboxEvent event) {
-        jdbc.update(
-                "INSERT INTO outbox (id, aggregatetype, aggregateid, type, payload, created_at) "
-                        + "VALUES (?, ?, ?, ?, ?::jsonb, ?)",
+        jdbc.update(INSERT_SQL, parameters(event));
+    }
+
+    public void insertBatch(List<OutboxEvent> events) {
+        if (!events.isEmpty()) {
+            jdbc.batchUpdate(INSERT_SQL, events.stream().map(OutboxRepository::parameters).toList());
+        }
+    }
+
+    private static Object[] parameters(OutboxEvent event) {
+        return new Object[] {
                 event.id(), event.aggregateType(), event.aggregateId(), event.type(), event.payload(),
-                OffsetDateTime.ofInstant(event.createdAt(), ZoneOffset.UTC));
+                OffsetDateTime.ofInstant(event.createdAt(), ZoneOffset.UTC) };
     }
 
     public List<OutboxEvent> findAll() {

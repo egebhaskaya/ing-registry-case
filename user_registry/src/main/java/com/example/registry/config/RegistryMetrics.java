@@ -2,6 +2,7 @@ package com.example.registry.config;
 
 import com.example.registry.services.RegistrationMode;
 import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import java.time.Duration;
@@ -19,6 +20,9 @@ public class RegistryMetrics {
     private final Timer completion;
     private final Timer directProcessing;
     private final Timer asyncProcessing;
+    private final Timer batchedProcessing;
+    private final Timer batchCommits;
+    private final DistributionSummary batchSize;
     private final AtomicInteger activeWorkers = new AtomicInteger();
 
     public RegistryMetrics(MeterRegistry registry, RabbitProperties rabbitProperties, Environment environment) {
@@ -26,6 +30,7 @@ public class RegistryMetrics {
         for (String outcome : new String[] {
                 "accepted", "overloaded", "broker_rejected", "unroutable", "broker_unavailable", "confirm_timeout" }) {
             registry.counter("registry.intake.requests", "outcome", outcome);
+            registry.counter("registry.batch.intake.requests", "outcome", outcome);
         }
         for (String outcome : new String[] { "created", "replayed", "conflict", "overloaded", "failed" }) {
             registry.counter("registry.sync.requests", "outcome", outcome);
@@ -38,7 +43,13 @@ public class RegistryMetrics {
         this.completion = registry.timer("registry.registration.completion");
         this.directProcessing = processingTimer("sync");
         this.asyncProcessing = processingTimer("async");
+        this.batchedProcessing = processingTimer("batched");
+        this.batchCommits = registry.timer("registry.batch.commits");
+        this.batchSize = DistributionSummary.builder("registry.batch.size")
+                .description("New users committed in each successful bulk database transaction")
+                .register(registry);
         registerHttpSuccessTimer("/registrations", "202");
+        registerHttpSuccessTimer("/registrations/batched", "202");
         registerHttpSuccessTimer("/registrations/sync", "200");
         registerHttpSuccessTimer("/registrations/sync", "201");
         Gauge.builder("registry.workers.active", activeWorkers, AtomicInteger::get)
@@ -48,10 +59,18 @@ public class RegistryMetrics {
         // Configuration gauges for the dashboard's context row: what this instance is bounded by.
         RabbitProperties.SimpleContainer listener = rabbitProperties.getListener().getSimple();
         Gauge.builder("registry.config.consumers", () -> orDefault(listener.getConcurrency(), 1))
-                .description("Configured Rabbit listener concurrency (messages processed at once)")
+                .description("Configured consumers per registration queue; batched consumers process groups")
                 .register(registry);
         Gauge.builder("registry.config.prefetch", () -> orDefault(listener.getPrefetch(), 250))
                 .description("Configured prefetch per consumer (unacknowledged deliveries allowed)")
+                .register(registry);
+        int configuredBatchSize = environment.getProperty("registry.batch.size", Integer.class, 100);
+        Gauge.builder("registry.config.batch.size", () -> configuredBatchSize)
+                .description("Maximum registrations collected by one batch consumer")
+                .register(registry);
+        Gauge.builder("registry.config.batch.prefetch",
+                        () -> Math.max(orDefault(listener.getPrefetch(), 250), configuredBatchSize))
+                .description("Batch consumer prefetch, raised to at least the batch size")
                 .register(registry);
         Gauge.builder("registry.threads.virtual.enabled", () -> Threading.VIRTUAL.isActive(environment) ? 1 : 0)
                 .description("1 when spring.threads.virtual.enabled is active, 0 on platform threads")
@@ -60,6 +79,14 @@ public class RegistryMetrics {
 
     public void intake(String outcome) {
         registry.counter("registry.intake.requests", "outcome", outcome).increment();
+    }
+
+    public void intake(RegistrationMode mode, String outcome) {
+        if (mode == RegistrationMode.BATCHED) {
+            registry.counter("registry.batch.intake.requests", "outcome", outcome).increment();
+        } else {
+            intake(outcome);
+        }
     }
 
     public void synchronous(String outcome) {
@@ -93,7 +120,16 @@ public class RegistryMetrics {
 
     /** Successful new registrations: processor entry through commit, including database connection waiting. */
     public void processing(RegistrationMode mode, Duration duration) {
-        (mode == RegistrationMode.SYNC ? directProcessing : asyncProcessing).record(duration);
+        switch (mode) {
+            case SYNC -> directProcessing.record(duration);
+            case ASYNC -> asyncProcessing.record(duration);
+            case BATCHED -> batchedProcessing.record(duration);
+        }
+    }
+
+    public void batchCommitted(int createdCount, Duration duration) {
+        batchCommits.record(duration);
+        batchSize.record(createdCount);
     }
 
     private Timer processingTimer(String mode) {

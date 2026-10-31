@@ -3,6 +3,9 @@ package com.example.registry.repositories;
 import com.example.registry.models.User;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,6 +28,10 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public class UserRepository {
+
+    private static final String INSERT_SQL =
+            "INSERT INTO users (id, registration_id, payload_fingerprint, email, full_name, country_code, created_at) "
+                    + "VALUES (?, ?, ?, ?, ?, ?, ?)";
 
     /** How one result-set row becomes a User. Written once, used by every query. */
     private static final RowMapper<User> ROW_MAPPER = (rs, rowNum) -> new User(
@@ -49,16 +56,35 @@ public class UserRepository {
                 ROW_MAPPER, registrationId).stream().findFirst();
     }
 
+    public List<User> findByRegistrationIds(Collection<UUID> registrationIds) {
+        if (registrationIds.isEmpty()) {
+            return List.of();
+        }
+        String placeholders = String.join(",", Collections.nCopies(registrationIds.size(), "?"));
+        return jdbc.query(
+                "SELECT id, registration_id, payload_fingerprint, email, full_name, country_code, created_at "
+                        + "FROM users WHERE registration_id IN (" + placeholders + ")",
+                ROW_MAPPER, registrationIds.toArray());
+    }
+
     /**
      * Plain INSERT: if registration_id or email already exists, PostgreSQL rejects
      * it and Spring throws.
      */
     public void insert(User user) {
-        jdbc.update(
-                "INSERT INTO users (id, registration_id, payload_fingerprint, email, full_name, country_code, created_at) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        jdbc.update(INSERT_SQL, parameters(user));
+    }
+
+    public void insertBatch(List<User> users) {
+        if (!users.isEmpty()) {
+            jdbc.batchUpdate(INSERT_SQL, users.stream().map(UserRepository::parameters).toList());
+        }
+    }
+
+    private static Object[] parameters(User user) {
+        return new Object[] {
                 user.id(), user.registrationId(), user.payloadFingerprint(), user.email(),
-                user.fullName(), user.countryCode(), OffsetDateTime.ofInstant(user.createdAt(), ZoneOffset.UTC));
+                user.fullName(), user.countryCode(), OffsetDateTime.ofInstant(user.createdAt(), ZoneOffset.UTC) };
     }
 
     public boolean existsByEmail(String email) {

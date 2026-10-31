@@ -47,13 +47,17 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
         Timer async = singleSuccessTimer("/registrations", "202");
         Timer created = singleSuccessTimer("/registrations/sync", "201");
         Timer replayed = singleSuccessTimer("/registrations/sync", "200");
+        Timer batched = singleSuccessTimer("/registrations/batched", "202");
         assertThat(async.count()).isZero();
         assertThat(created.count()).isZero();
         assertThat(replayed.count()).isZero();
+        assertThat(batched.count()).isZero();
         Timer asyncProcessing = meters.get("registry.registration.processing").tag("mode", "async").timer();
         Timer syncProcessing = meters.get("registry.registration.processing").tag("mode", "sync").timer();
+        Timer batchedProcessing = meters.get("registry.registration.processing").tag("mode", "batched").timer();
         assertThat(asyncProcessing.count()).isZero();
         assertThat(syncProcessing.count()).isZero();
+        assertThat(batchedProcessing.count()).isZero();
         UUID key = UUID.randomUUID();
         client.post().uri("/registrations")
                 .header("Idempotency-Key", key.toString())
@@ -73,15 +77,24 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .header("Idempotency-Key", syncKey.toString())
                 .contentType(MediaType.APPLICATION_JSON).body(syncRequest)
                 .exchange().expectStatus().isOk();
+        UUID batchKey = UUID.randomUUID();
+        client.post().uri("/registrations/batched")
+                .header("Idempotency-Key", batchKey.toString())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new RegistrationRequest("Batch User", "metrics-" + batchKey + "@example.com", "NL"))
+                .exchange().expectStatus().isAccepted();
         await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
             assertThat(singleSuccessTimer("/registrations", "202")).isSameAs(async);
             assertThat(singleSuccessTimer("/registrations/sync", "201")).isSameAs(created);
             assertThat(singleSuccessTimer("/registrations/sync", "200")).isSameAs(replayed);
+            assertThat(singleSuccessTimer("/registrations/batched", "202")).isSameAs(batched);
             assertThat(async.count()).isEqualTo(1);
             assertThat(created.count()).isEqualTo(1);
             assertThat(replayed.count()).isEqualTo(1);
             assertThat(asyncProcessing.count()).isEqualTo(1);
             assertThat(syncProcessing.count()).isEqualTo(1);
+            assertThat(batched.count()).isEqualTo(1);
+            assertThat(batchedProcessing.count()).isEqualTo(1);
         });
 
         String metrics = client.get().uri("/actuator/prometheus")
@@ -97,6 +110,10 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .contains("registry_registrations_total{application=\"registry-service\",outcome=\"created\"}")
                 .contains("registry_registration_completion_seconds_bucket")
                 .contains("registry_registration_processing_seconds_bucket")
+                .contains("registry_batch_intake_requests_total{application=\"registry-service\",outcome=\"accepted\"} 1.0")
+                .contains("registry_batch_size_count{application=\"registry-service\"} 1")
+                .contains("registry_batch_size_sum{application=\"registry-service\"} 1.0")
+                .contains("registry_batch_commits_seconds_count{application=\"registry-service\"} 1")
                 // configuration and runtime gauges for the dashboard's context row
                 .contains("registry_config_consumers{application=\"registry-service\"} "
                         + rabbitProperties.getListener().getSimple().getConcurrency().doubleValue())
@@ -111,6 +128,7 @@ class RegistryMetricsTest extends AbstractIntegrationTest {
                 .contains("jvm_info{");
         assertThat(hasProcessingBuckets(metrics, "sync")).isTrue();
         assertThat(hasProcessingBuckets(metrics, "async")).isTrue();
+        assertThat(hasProcessingBuckets(metrics, "batched")).isTrue();
     }
 
     private static boolean hasProcessingBuckets(String metrics, String mode) {

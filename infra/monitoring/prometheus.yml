@@ -1,5 +1,6 @@
-# Prometheus samples both applications and RabbitMQ every second for the local demonstration.
-# Short spikes between samples can be missed; the dashboard shows sampled observations.
+# Prometheus scrapes both applications and RabbitMQ every second for the local demonstration.
+# RabbitMQ updates its queue statistics every 5 seconds by default, independently of scraping.
+# Short queue spikes between broker updates can be missed even with one-second scrapes.
 global:
   scrape_interval: 1s
   scrape_timeout: 1s

@@ -36,6 +36,13 @@ public class RegistrationController {
         return registrations.enqueue(idempotencyKey, request);
     }
 
+    @PostMapping("/batched")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public RegistrationAcceptedResponse registerBatched(@RequestHeader("Idempotency-Key") UUID idempotencyKey,
+            @Valid @RequestBody RegistrationRequest request) {
+        return registrations.enqueueBatched(idempotencyKey, request);
+    }
+
     @PostMapping("/sync")
     public ResponseEntity<RegistrationCompletedResponse> registerSynchronously(
             @RequestHeader("Idempotency-Key") UUID idempotencyKey,

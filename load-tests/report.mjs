@@ -21,9 +21,9 @@ ${workloadDetails(run)}
 </style></head><body><main>
 <p class="muted">LOCAL LOAD TESTS</p><h1>All runs</h1>
 <div class="intro"><p>${integer(runs.length)} saved ${runs.length === 1 ? 'run' : 'runs'}, newest first. Each load-test run updates this page. Refresh this browser tab after a run finishes.</p>
-<p class="note">Async measures HTTP acceptance into RabbitMQ; sync waits for Registry commit. Neither summary measures Compliance completion. Burst runs use clients that wait for responses; continuous runs schedule new requests at a target arrival rate. Actual achieved rates can differ from the target.</p></div>
+<p class="note">Async and batched measure HTTP acceptance into RabbitMQ; sync waits for Registry commit. Batched groups queued registrations into database transactions. These summaries do not measure Compliance completion or batch commit time. Burst runs use clients that wait for responses; continuous runs schedule new requests at a target arrival rate. Actual achieved rates can differ from the target.</p></div>
 ${unreadable.length ? `<details class="review"><summary>${integer(unreadable.length)} summaries could not be read</summary><ul>${unreadable.map(file => `<li>${escape(file)}</li>`).join('')}</ul></details>` : ''}
-<div class="runs">${runs.length ? `<table aria-label="Load-test run comparison"><thead><tr><th>Run</th><th>Mode</th><th>Requests</th><th>HTTP failures</th><th>HTTP p95 (ms)</th><th>Duration (s)</th><th title="Burst clients or preallocated continuous VUs; see details for observed maximum">VUs</th></tr></thead>${rows}</table>` : '<p class="empty">No runs yet. Start the services and run make k6 or make k6-sync.</p>'}</div>
+<div class="runs">${runs.length ? `<table aria-label="Load-test run comparison"><thead><tr><th>Run</th><th>Mode</th><th>Requests</th><th>HTTP failures</th><th>HTTP p95 (ms)</th><th>Duration (s)</th><th title="Burst clients or preallocated continuous VUs; see details for observed maximum">VUs</th></tr></thead>${rows}</table>` : '<p class="empty">No runs yet. Start the services and run make k6, make k6-sync or make k6-batched.</p>'}</div>
 </main></body></html>`;
 }
 
@@ -32,7 +32,7 @@ function summarize({ data, fileName }) {
   const count = name => value(name, 'count') ?? 0;
   const id = data.run?.id || fileName.replace(/\.summary\.json$/, '');
   const accepted = count('registrations_accepted'), created = count('registrations_created'), replayed = count('registrations_replayed');
-  const mode = data.run?.mode || /^(async|sync)-/.exec(id)?.[1] || (accepted > 0 ? 'async' : created + replayed > 0 ? 'sync' : 'unknown');
+  const mode = data.run?.mode || /^(async|sync|batched)-/.exec(id)?.[1] || (accepted > 0 ? 'async' : created + replayed > 0 ? 'sync' : 'unknown');
   const requests = value('http_reqs', 'count') ?? value('iterations', 'count') ?? 0;
   const iterations = value('iterations', 'count') ?? 0;
   const requested = number(data.run?.requestedIterations);
@@ -63,7 +63,7 @@ function summarize({ data, fileName }) {
     vus: number(data.run?.virtualUsers) ?? value('vus_max', 'max') ?? value('vus', 'max'),
     status: problem ? 'Review errors, dropped iterations, incomplete burst or k6 exit status below.' : requests === 0 ? 'No requests recorded.' : httpFailures === null ? 'HTTP failure count was not recorded.' : 'No HTTP, check or dropped-iteration failures recorded.',
     completion: continuous ? `${integer(iterations)} iterations completed during the recorded run; continuous runs have no fixed iteration target.` : requested === null ? 'Requested iteration count was not recorded in this older summary.' : `${integer(iterations)} of ${integer(requested)} requested iterations completed${iterations === requested ? '.' : ' — incomplete run.'}`,
-    meaning: mode === 'async' ? 'Async: a successful HTTP response means RabbitMQ accepted the command; processing can continue afterward.' : mode === 'sync' ? 'Sync: a successful HTTP response follows the Registry database commit. Compliance continues separately.' : 'Endpoint mode was not recorded in this summary.',
+    meaning: mode === 'async' ? 'Async: a successful HTTP response means RabbitMQ accepted the command; processing can continue afterward.' : mode === 'batched' ? 'Batched: a successful HTTP response means RabbitMQ accepted one registration into the batch queue. Grouping and database commit happen afterward; this HTTP timing excludes both.' : mode === 'sync' ? 'Sync: a successful HTTP response follows the Registry database commit. Compliance continues separately.' : 'Endpoint mode was not recorded in this summary.',
     outcomes: [['202 Accepted', accepted], ['201 Created', created], ['200 Replayed', replayed], ['409 Conflict', count('registrations_conflicts')], ['503 Unavailable', count('registrations_rejected_503')], ['Other responses / transport errors', value('registrations_other', 'count') ?? Math.max(requests - knownOutcomes, 0)]],
   };
 }

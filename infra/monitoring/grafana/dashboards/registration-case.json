@@ -1,7 +1,7 @@
 {
   "uid": "registration-case",
   "title": "Registration Case",
-  "description": "Async registrations use RabbitMQ; sync calls the shared Registry processor directly. Separate HTTP response and Registry processing-to-commit graphs use milliseconds. The processing comparison uses the same boundary for both modes, including database connection waiting but excluding Rabbit queue waiting and downstream Compliance; concurrency can differ. One-second samples and refresh, 10-second rates, and rolling 30-second histogram p95 estimates. Lifetime counters reset independently on service restart.",
+  "description": "Three registration paths share one database pool and one outbox/Kafka/Compliance flow. Async and batched HTTP responses mean RabbitMQ acceptance; sync returns after a direct commit. Processing-to-commit p95 includes database waits and excludes queue and batch collection waiting. Batched items each measure the full shared transaction duration, not duration divided by batch size. One-second sampling, ten-second rates and rolling thirty-second histogram estimates; lifetime counters reset on restart.",
   "tags": [
     "registration-case"
   ],
@@ -10,7 +10,7 @@
   "graphTooltip": 1,
   "refresh": "1s",
   "schemaVersion": 39,
-  "version": 10,
+  "version": 11,
   "time": {
     "from": "now-5m",
     "to": "now"
@@ -26,7 +26,7 @@
       "id": 1,
       "type": "stat",
       "title": "Configuration and current activity",
-      "description": "Configured limits are not measured busy work. Rabbit consumer count and prefetch apply only to async registrations; direct sync requests are bounded by shared HTTP admission and the database pool. Prefetch limits unfinished deliveries per Rabbit consumer. Both paths share Registry database connections. Virtual threads reports Registry thread mode. Compliance busy now includes database waiting and can remain nonzero after Registry has finished; useful Kafka concurrency is bounded by partition count.",
+      "description": "Rabbit consumers is configured per queue: the ordinary async queue and batch queue each have this many consumers. All paths share the Registry database pool. The displayed prefetch is for the ordinary queue; effective batch prefetch is max(configured prefetch, batch size). Batch size is a maximum; partial batches also flush on the collection timeout. Busy work includes database waiting and is not CPU parallelism. Compliance concurrency is also bounded by Kafka partitions.",
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -41,13 +41,13 @@
         {
           "refId": "A",
           "expr": "(max(registry_config_consumers{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Async Rabbit consumers",
+          "legendFormat": "Rabbit consumers / queue",
           "instant": true
         },
         {
           "refId": "B",
           "expr": "(max(registry_config_prefetch{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Async prefetch / consumer",
+          "legendFormat": "Normal queue prefetch",
           "instant": true
         },
         {
@@ -72,6 +72,12 @@
           "refId": "F",
           "expr": "(sum(compliance_workers_active{job=\"compliance\",application=\"compliance-service\"})) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance busy now",
+          "instant": true
+        },
+        {
+          "refId": "G",
+          "expr": "(max(registry_config_batch_size{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Max registrations / batch",
           "instant": true
         }
       ],
@@ -130,7 +136,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Server decisions and processing /s",
-      "description": "Ten-second rate estimates from application counters sampled every second, not exact k6 burst throughput. Async accepted decisions follow RabbitMQ broker confirmation. Sync completed decisions follow a direct Registry transaction and include replays. Registry creations and Compliance checks count new committed results. These stages can finish at different times.",
+      "description": "Ten-second rate estimates from application counters sampled every second, not exact k6 burst throughput. Async and batched accepted decisions follow RabbitMQ broker confirmation. Sync completed decisions follow a direct Registry transaction and include replays. Registry creations and Compliance checks count new committed results. These stages can finish at different times.",
       "gridPos": {
         "x": 0,
         "y": 3,
@@ -164,6 +170,12 @@
           "refId": "D",
           "expr": "(sum(rate(compliance_events_total{job=\"compliance\",application=\"compliance-service\",outcome=\"processed\"}[10s]))) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance checks",
+          "instant": false
+        },
+        {
+          "refId": "E",
+          "expr": "(sum(rate(registry_batch_intake_requests_total{job=\"registry\",application=\"registry-service\",outcome=\"accepted\"}[10s]))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Batched accepted decisions",
           "instant": false
         }
       ],
@@ -205,8 +217,8 @@
     {
       "id": 3,
       "type": "timeseries",
-      "title": "RabbitMQ queue (async only)",
-      "description": "Sampled async messages in registration.commands. Direct sync requests do not enter this queue. Ready messages wait at the broker. Unacknowledged includes processing and prefetched deliveries waiting at Rabbit consumers, so it is not a busy-worker count. Ready and unacknowledged must both reach zero to drain. Missing telemetry remains a gap; sampled maxima can miss shorter peaks.",
+      "title": "RabbitMQ queues (async and batched)",
+      "description": "Current unfinished work in the ordinary and batched queues, not total messages handled. Direct sync bypasses both. Ready messages wait at the broker; unacknowledged includes processing, prefetch and batch collection. RabbitMQ updates these statistics every five seconds by default; one-second Prometheus scrapes cannot recover queue peaks between broker updates. A short run can show zero depth despite thousands of messages passing through. Check acceptance, Registry creations and average DB batch size alongside this graph. Batch prefetch is at least batch size. Both ready and unacknowledged must drain to zero. Missing telemetry stays a gap.",
       "gridPos": {
         "x": 12,
         "y": 3,
@@ -221,13 +233,25 @@
         {
           "refId": "A",
           "expr": "(sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
-          "legendFormat": "Ready at broker",
+          "legendFormat": "Async: ready at broker",
           "instant": false
         },
         {
           "refId": "B",
           "expr": "(sum(rabbitmq_queue_messages_unacked{job=\"rabbitmq\",queue=\"registration.commands\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
-          "legendFormat": "Unacknowledged",
+          "legendFormat": "Async: unacknowledged",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "(sum(rabbitmq_queue_messages_ready{job=\"rabbitmq\",queue=\"registration.commands.batched\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
+          "legendFormat": "Batched: ready at broker",
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "expr": "(sum(rabbitmq_queue_messages_unacked{job=\"rabbitmq\",queue=\"registration.commands.batched\"})) and on() (max(up{job=\"rabbitmq\"}) == 1)",
+          "legendFormat": "Batched: unacknowledged",
           "instant": false
         }
       ],
@@ -270,7 +294,7 @@
       "id": 4,
       "type": "timeseries",
       "title": "Registry processing and database pool",
-      "description": "One-second samples. Processing registrations includes direct HTTP requests and Rabbit worker attempts, including time waiting for a database connection. This total is not bounded by Rabbit consumer count. Both paths share Hikari: active connections are borrowed; pending callers wait for one. Counts are not CPU parallelism. Short activity between samples can be missed.",
+      "description": "One-second samples. Processing workers includes direct HTTP requests and Rabbit worker attempts, including time waiting for a database connection. This total is not bounded by Rabbit consumer count. All three paths share Hikari: active connections are borrowed; pending callers wait for one. One batch worker can process several registrations in one transaction; the worker count is not a registration count or CPU parallelism. Short activity between samples can be missed.",
       "gridPos": {
         "x": 0,
         "y": 15,
@@ -285,7 +309,7 @@
         {
           "refId": "A",
           "expr": "(sum(registry_workers_active{job=\"registry\",application=\"registry-service\"})) and on() (max(up{job=\"registry\"}) == 1)",
-          "legendFormat": "Processing registrations (HTTP + Rabbit)",
+          "legendFormat": "Processing workers (incl. DB waits)",
           "instant": false
         },
         {
@@ -369,7 +393,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "HTTP response time (p95, milliseconds)",
-      "description": "Successful HTTP responses over a rolling 30-second window. Async returns after RabbitMQ confirms acceptance; processing can continue afterward. Sync returns after its direct Registry transaction commits. These responses promise different things: a lower async response time does not mean a faster database write. Histogram estimates can differ from exact per-run k6 measurements. Idle windows remain gaps.",
+      "description": "Successful HTTP responses over a rolling 30-second window. Async and batched return after RabbitMQ confirms acceptance; processing can continue afterward. Sync returns after its direct Registry transaction commits. These responses promise different things: a lower queued response time does not mean a faster database write. Histogram estimates can differ from exact per-run k6 measurements. Idle windows remain gaps.",
       "gridPos": {
         "x": 12,
         "y": 15,
@@ -391,6 +415,12 @@
           "refId": "B",
           "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations/sync\",method=\"POST\",status=~\"200|201\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "Sync: Registry DB committed (200/201)",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"registry\",application=\"registry-service\",uri=\"/registrations/batched\",method=\"POST\",status=\"202\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Batched: accepted into RabbitMQ (202)",
           "instant": false
         }
       ],
@@ -443,6 +473,21 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batched: accepted into RabbitMQ (202)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
           }
         ]
       },
@@ -466,7 +511,7 @@
       "id": 8,
       "type": "timeseries",
       "title": "Registry processing to commit (p95, milliseconds)",
-      "description": "The same timing boundary for both modes: processing starts on the HTTP thread or Rabbit worker and ends after the new user and outbox commit. Includes database connection waiting and transaction work. Excludes HTTP admission and normalization, Rabbit queue waiting and retry backoff, Kafka and Compliance. Only successful new registrations are recorded; replays and failures are excluded. Direct HTTP requests and Rabbit workers can still have different concurrency limits. Rolling 30-second histogram estimates can blend nearby runs. Idle windows and earlier runs remain gaps because this new metric has no historical backfill.",
+      "description": "All three modes measure successful new registrations from processor entry until user and outbox commit, including database connection waiting. Excludes HTTP admission, normalization, Rabbit queue and batch collection waiting, retry backoff, Kafka and Compliance. For successful bulk commits, each new registration records the full shared transaction duration, not duration divided by batch size. Individual isolation commits also appear under batched mode; recovery forwarded to the ordinary queue appears under async mode. Batch registration latency can rise while registrations committed per second improves. Replays and failures are excluded. Modes can have different concurrency limits. Rolling thirty-second p95 estimates can blend nearby runs; idle windows stay gaps.",
       "gridPos": {
         "x": 0,
         "y": 27,
@@ -488,6 +533,12 @@
           "refId": "B",
           "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(registry_registration_processing_seconds_bucket{job=\"registry\",application=\"registry-service\",mode=\"async\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "Async worker: processing to commit",
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "expr": "(1000 * histogram_quantile(0.95, sum by (le) (rate(registry_registration_processing_seconds_bucket{job=\"registry\",application=\"registry-service\",mode=\"batched\"}[30s])))) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Batched worker: processing to commit",
           "instant": false
         }
       ],
@@ -540,6 +591,21 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Batched worker: processing to commit"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
           }
         ]
       },
@@ -564,7 +630,7 @@
       "id": 6,
       "type": "stat",
       "title": "Progress since each service started",
-      "description": "Application decision and result counters since each service process started, not totals for the selected range or an exact per-run ledger. Async accepted and sync completed are server decisions; sync includes replay responses. Registry creations count new users, while Compliance checks count new results. Services reset independently on restart, so these values need not match. Use the HTML k6 report for a specific run.",
+      "description": "Application decision and result counters since each service process started, not totals for the selected range or an exact per-run ledger. Async/batched accepted and sync completed are server decisions; sync includes replay responses. Registry creations count new users, while Compliance checks count new results. Services reset independently on restart, so these values need not match. Use the HTML k6 report for a specific run. Average new users per DB batch is a lifetime average for successful bulk commits; failed batches and individual fallback commits are excluded.",
       "gridPos": {
         "x": 0,
         "y": 37,
@@ -599,6 +665,18 @@
           "expr": "(sum(compliance_events_total{job=\"compliance\",application=\"compliance-service\",outcome=\"processed\"})) and on() (max(up{job=\"compliance\"}) == 1)",
           "legendFormat": "Compliance checks",
           "instant": true
+        },
+        {
+          "refId": "E",
+          "expr": "(sum(registry_batch_intake_requests_total{job=\"registry\",application=\"registry-service\",outcome=\"accepted\"})) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Batched accepted",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "expr": "(sum(registry_batch_size_sum{job=\"registry\",application=\"registry-service\"}) / (sum(registry_batch_size_count{job=\"registry\",application=\"registry-service\"}) > 0)) and on() (max(up{job=\"registry\"}) == 1)",
+          "legendFormat": "Avg new users / DB batch",
+          "instant": true
         }
       ],
       "fieldConfig": {
@@ -609,7 +687,24 @@
           "noValue": "No data",
           "mappings": []
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Avg new users / DB batch"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "reduceOptions": {
@@ -645,7 +740,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "((sum(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync)?\",method=\"POST\",status=~\"[45]..\"})) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "((sum(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync|/batched)?\",method=\"POST\",status=~\"[45]..\"})) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "HTTP 4xx/5xx",
           "instant": true
         },
@@ -670,7 +765,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "none",
           "decimals": 0,
           "min": 0,
           "noValue": "No data",
@@ -958,7 +1053,7 @@
       "id": 13,
       "type": "timeseries",
       "title": "Errors per second",
-      "description": "Ten-second rates, not lifetime totals or counts for one benchmark run. HTTP 5xx covers POST /registrations and /registrations/sync; Registry failed attempts count technical processing failures and can overlap HTTP failures or retried async work, so do not add the lines. Rates handle counter resets. HTTP error labels are created on first occurrence: rates need two samples and can undercount an initial short burst. The Registry failed-attempt counter is pre-initialized. An absent HTTP 5xx series is treated as zero only while Registry is UP; a failed scrape remains a gap.",
+      "description": "Ten-second rates, not lifetime totals or counts for one benchmark run. HTTP 5xx covers all three registration POST endpoints; Registry failed attempts count technical processing failures and can overlap HTTP failures or retried async work, so do not add the lines. Rates handle counter resets. HTTP error labels are created on first occurrence: rates need two samples and can undercount an initial short burst. The Registry failed-attempt counter is pre-initialized. An absent HTTP 5xx series is treated as zero only while Registry is UP; a failed scrape remains a gap.",
       "gridPos": {
         "x": 12,
         "y": 46,
@@ -972,7 +1067,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync)?\",method=\"POST\",status=~\"5..\"}[10s]))) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
+          "expr": "((sum(rate(http_server_requests_seconds_count{job=\"registry\",application=\"registry-service\",uri=~\"/registrations(/sync|/batched)?\",method=\"POST\",status=~\"5..\"}[10s]))) or on() vector(0)) and on() (max(up{job=\"registry\"}) == 1)",
           "legendFormat": "HTTP 5xx /s",
           "instant": false
         },

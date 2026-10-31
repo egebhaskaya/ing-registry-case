@@ -10,6 +10,8 @@ import org.springframework.amqp.core.FanoutExchange;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.retry.MessageRecoverer;
 import org.springframework.amqp.rabbit.retry.RepublishMessageRecoverer;
 import org.springframework.amqp.support.converter.JacksonJsonMessageConverter;
@@ -17,6 +19,8 @@ import org.springframework.amqp.support.converter.MessageConversionException;
 import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.amqp.autoconfigure.RabbitListenerRetrySettingsCustomizer;
+import org.springframework.boot.amqp.autoconfigure.RabbitProperties;
+import org.springframework.boot.amqp.autoconfigure.SimpleRabbitListenerContainerFactoryConfigurer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -38,7 +42,7 @@ import org.springframework.context.annotation.Configuration;
  * Queue overflow is not dead-lettered: with reject-publish the broker NACKs the publisher instead.
  */
 @Configuration
-@EnableConfigurationProperties({RegistryRabbitProperties.class, IntakeProperties.class})
+@EnableConfigurationProperties({RegistryRabbitProperties.class, RegistryBatchProperties.class, IntakeProperties.class})
 public class RabbitConfig {
 
     /** Direct exchange: a message goes to the queue(s) bound with exactly its routing key. */
@@ -71,6 +75,39 @@ public class RabbitConfig {
     @Bean
     Queue registrationDeadLetterQueue(RegistryRabbitProperties props) {
         return QueueBuilder.durable(props.deadLetterQueue()).build();
+    }
+
+    @Bean
+    Queue registrationBatchQueue(RegistryRabbitProperties rabbit, RegistryBatchProperties batch) {
+        return QueueBuilder.durable(batch.queue())
+                .deadLetterExchange(rabbit.deadLetterExchange())
+                .maxLength(rabbit.queueMaxLength())
+                .overflow(QueueBuilder.Overflow.rejectPublish)
+                .build();
+    }
+
+    @Bean
+    Binding registrationBatchBinding(@Qualifier("registrationBatchQueue") Queue queue,
+            DirectExchange registrationExchange, RegistryBatchProperties batch) {
+        return BindingBuilder.bind(queue).to(registrationExchange).with(batch.routingKey());
+    }
+
+    /** Boot supplies thread mode/concurrency; failed items reuse the original listener's retry policy. */
+    @Bean
+    SimpleRabbitListenerContainerFactory registrationBatchContainerFactory(
+            SimpleRabbitListenerContainerFactoryConfigurer configurer, ConnectionFactory connectionFactory,
+            RegistryBatchProperties batch, RabbitProperties rabbit) {
+        var factory = new SimpleRabbitListenerContainerFactory();
+        configurer.configure(factory, connectionFactory);
+        factory.setConsumerBatchEnabled(true);
+        factory.setBatchSize(batch.size());
+        factory.setReceiveTimeout(batch.maxWait().toMillis());
+        factory.setBatchReceiveTimeout(batch.maxWait().toMillis());
+        Integer prefetch = rabbit.getListener().getSimple().getPrefetch();
+        factory.setPrefetchCount(Math.max(prefetch == null ? 250 : prefetch, batch.size()));
+        // Single-message retry advice/recovery cannot isolate failures in a consumer-created batch.
+        factory.setAdviceChain();
+        return factory;
     }
 
     @Bean
