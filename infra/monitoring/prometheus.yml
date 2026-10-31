@@ -7,16 +7,16 @@ global:
   evaluation_interval: 1s
 
 scrape_configs:
-  # The two applications run on the host (mvnw spring-boot:run or java -jar), not in compose.
+  # Both Java applications run on the Compose network.
   - job_name: registry
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ["host.docker.internal:8080"]
+      - targets: ["registry:8080"]
 
   - job_name: compliance
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: ["host.docker.internal:8081"]
+      - targets: ["compliance:8081"]
 
   # RabbitMQ's built-in rabbitmq_prometheus plugin; per-queue series are enabled in
   # infra/rabbitmq/20-prometheus.conf (return_per_object_metrics = true).

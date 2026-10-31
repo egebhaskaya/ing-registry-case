@@ -16,19 +16,23 @@ Each new user has its own outbox event, and all three paths use the same outbox 
 
 ## Start
 
-Install Java 25, Docker with Compose, GNU make, Bash (Git for Windows supplies Bash on Windows), and
-Node.js for generating the local HTML run report (no npm packages needed).
-Run from the repository root:
+Install Docker with Compose, GNU make, Bash (Git for Windows supplies Bash on Windows), and Node.js
+for generating the local HTML run report (no npm packages needed). Docker builds and runs both Java
+services, so a host Java installation is unnecessary for the demo. From the repository root:
 
 ```text
-make up          # Start infrastructure and register the Debezium connector
-make registry    # Leave running in its own terminal (port 8080)
-make compliance  # Leave running in another terminal (port 8081)
+make up  # Build and start the complete demo in the background
 ```
 
-The service commands use each project's Maven Wrapper; no separate Maven installation or packaging
-step is needed. `make build` creates runnable JARs when needed. Init containers should finish with exit
-code 0. `make connector` shows the Debezium connector and task; both should be `RUNNING`.
+Before switching from host development, stop any existing host Registry/Compliance processes using
+ports 8080/8081. `make up` starts both applications, PostgreSQL, RabbitMQ, Kafka, Debezium, Prometheus
+and Grafana. Kafka topics are initialized before Compliance starts; the connector is registered after
+Registry creates its tables. The command returns when startup and connector registration finish.
+The first build downloads dependencies and takes longer. Init containers should finish with exit
+code 0. `make connector` shows the connector and task; both should be `RUNNING`.
+
+Use `make logs` to watch application logs; Ctrl+C stops watching while the containers keep running.
+`make ps` shows their status. Source changes are rebuilt by `make up`.
 
 ## Change concurrency
 
@@ -81,15 +85,21 @@ at the same arrival rate, worker count and pool size. Batching can improve throu
 each registration's total waiting time. One bad registration must not discard the other registrations.
 
 Compliance has its own [application.properties](compliance/src/main/resources/application.properties),
-with `spring.kafka.listener.concurrency`, pool size and virtual-thread mode at the top. Its topic has
-four partitions, so at most four consumers can process records concurrently.
+with `spring.kafka.listener.concurrency`, pool size and virtual-thread mode at the top. The topic's
+partition count bounds active consumers. On startup, [Spring KafkaAdmin](https://docs.spring.io/spring-kafka/reference/kafka/configuring-topics.html)
+increases existing topics to `compliance.kafka.partitions` if needed; it cannot reduce their partitions.
 
-Restart the affected `make registry` or `make compliance` command after editing. Previously packaged
-JARs need rebuilding to include changed resource files. Load tests never override application settings.
+Run `make registry` or `make compliance` after editing that service's properties. Each command
+rebuilds/restarts just that application in Docker, waits for health, and returns to your terminal.
+The properties files are mounted read-only into the containers; Docker overrides connection hosts
+to reach the other services. Your consumer, pool and virtual-thread settings still come from these
+files. Load tests never override them.
 
 ## Run load tests
 
-Keep both services running. Run one load test at a time:
+After `make up` completes, the default Docker k6 runner joins the Compose network and calls Registry
+directly, avoiding a round trip through the host. A native `K6_BIN` uses localhost; an explicit
+`BASE_URL` overrides the target. Run one load test at a time:
 
 ```text
 make k6          # /registrations: accept into the queue; individual DB commits
@@ -218,9 +228,12 @@ See [the detailed sync flow](docs/synchronous-registration.md).
 | Command | Purpose |
 |---|---|
 | `make help` | List commands |
+| `make up` | Build and start the complete demo in Docker |
+| `make registry` / `make compliance` | Rebuild/restart one app and reload its properties |
+| `make build` | Build both application images without starting them |
+| `make logs` / `make ps` | Follow application logs / show container status |
 | `make test` / `make verify` | Correctness tests / complete Maven verification |
 | `make smoke` | Verify the real Rabbit -> Registry -> CDC -> Kafka -> Compliance path |
-| `make ps` | Show containers |
 | `make connector` / `make lag` | Debezium status / Compliance Kafka lag |
 | `make down` | Stop infrastructure, preserve data |
 | `make clean` | Stop infrastructure and delete its data volumes |
@@ -228,6 +241,11 @@ See [the detailed sync flow](docs/synchronous-registration.md).
 RabbitMQ management: [localhost:15672](http://localhost:15672) (`guest` / `guest`). Prometheus:
 [localhost:9090](http://localhost:9090). Application health: ports 8080/8081, `/actuator/health`.
 This is a local demo with development credentials and single-node infrastructure.
+
+`make test` and `make verify` run the Maven Wrappers on the host and require Java 25 plus Docker for
+Testcontainers. Optional host development uses `user_registry/mvnw -f user_registry/pom.xml spring-boot:run`
+or the equivalent `compliance` command; stop the corresponding app container first to free its port.
+Normal demo startup and app rebuilds need no host Java installation.
 
 `user_registry` contains HTTP, Rabbit workers and user/outbox persistence; `compliance` contains Kafka
 consumption and checks; `infra` contains Compose/monitoring; `load-tests` contains the shared k6 scenario.

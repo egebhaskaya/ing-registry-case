@@ -2,6 +2,11 @@
 
 Async and batched use the same RabbitMQ broker. Sync processes directly on its HTTP handler.
 
+`make up` builds and starts the complete stack in Docker, including Registry and Compliance. Kafka
+topic initialization completes before Compliance starts. Connector registration follows Registry's
+healthy startup, so its Flyway tables exist first. Prometheus scrapes the application containers by
+service name; the API ports and Grafana remain available on localhost.
+
 ```mermaid
 flowchart LR
     A[POST /registrations] --> Q[RabbitMQ: registration.commands]

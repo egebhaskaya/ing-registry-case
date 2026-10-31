@@ -1,0 +1,14 @@
+target/
+.git/
+**/.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+*.iml
+*.log
+**/results/
+load-tests/
+src/test/
+mvnw.cmd
+HELP.md

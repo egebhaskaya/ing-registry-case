@@ -1,19 +1,21 @@
-# Local infrastructure for the registration case (docs/design.md sections 3 and 8).
+# Full local stack for the registration case (docs/design.md sections 3 and 8).
 # Everything is pinned, local, and keeps its data in named volumes across restarts.
 #
 #   postgres     one server, two service-owned databases (registry, compliance); wal_level=logical for CDC
 #   rabbitmq     command queue between the Registry API and its consumers; management UI + Prometheus plugin
 #   kafka        single-node KRaft broker carrying the UserRegistered events
 #   connect      Debezium Kafka Connect: reads committed outbox rows from PostgreSQL and publishes them
-#   prometheus   scrapes both applications (on the host) and RabbitMQ every second
-#   grafana      one provisioned dashboard on top of Prometheus; no login, no internet access needed
+#   registry     Registry API and Rabbit workers, built with Java 25
+#   compliance   Kafka consumer and compliance checks, built with Java 25
+#   prometheus   scrapes both application containers and RabbitMQ every second
+#   grafana      one provisioned dashboard on top of Prometheus; no login
 #
-# Profile "init" (one-shot containers, run after the stack is healthy; safe to repeat):
-#   kafka-init   creates the event topic and its dead-letter topic with 4 partitions
+# One-shot initialization (safe to repeat):
+#   kafka-init   creates the event topics before Compliance starts; KafkaAdmin applies its configured partitions
 #   connect-init registers (or updates) the outbox connector through the Connect REST API
+#                in the "init" profile, after Registry migrations and Connect startup
 #
-#   docker compose -f infra/compose.yml up -d --wait
-#   docker compose -f infra/compose.yml --profile init up --force-recreate kafka-init connect-init
+#   make up
 #
 # --force-recreate matters: an exited one-shot container keeps a reference to the network it ran on;
 # after the network was recreated (down/up, Docker restart) a plain "up" would try to reuse that
@@ -89,7 +91,6 @@ services:
 
   kafka-init:
     image: apache/kafka:4.2.2
-    profiles: ["init"]   # one-shot; run with: docker compose --profile init up kafka-init connect-init
     depends_on:
       kafka:
         condition: service_healthy
@@ -101,12 +102,50 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
         --topic outbox.event.user.DLT --partitions 4 --replication-factor 1
 
+  registry:
+    image: registration-case-registry:local
+    build:
+      context: ../user_registry
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/registry
+      SPRING_RABBITMQ_HOST: rabbitmq
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../user_registry/src/main/resources/application.properties:/app/config/application.properties:ro
+    stop_grace_period: 40s
+
+  compliance:
+    image: registration-case-compliance:local
+    build:
+      context: ../compliance
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/compliance
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8081:8081"
+    volumes:
+      - ../compliance/src/main/resources/application.properties:/app/config/application.properties:ro
+    stop_grace_period: 40s
+
   connect:
     image: quay.io/debezium/connect:3.7.0.Final
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      registry:
         condition: service_healthy
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
@@ -127,10 +166,14 @@ services:
 
   connect-init:
     image: curlimages/curl:8.23.0
-    profiles: ["init"]   # one-shot, idempotent; see kafka-init
+    profiles: ["init"]   # one-shot connector registration after the stack is healthy
     depends_on:
       connect:
         condition: service_healthy
+      registry:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     volumes:
       - ./debezium:/debezium:ro
     # PUT /connectors/{name}/config creates the connector or updates it: safe to run on every start.
@@ -150,8 +193,6 @@ services:
       - --storage.tsdb.retention.time=7d
     ports:
       - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # the two applications run on the host, not in compose
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -172,7 +213,7 @@ services:
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
       # Short local load bursts need one-second dashboard refreshes.
       GF_DASHBOARDS_MIN_REFRESH_INTERVAL: "1s"
-      # Offline: no update checks, usage reporting or news feed (design section 3).
+      # Disable update checks, usage reporting and the news feed.
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"

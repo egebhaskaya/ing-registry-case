@@ -1,5 +1,5 @@
 # Front door for the registration case. Maven (each module's mvnw) is still the build tool and
-# Docker Compose still owns the infrastructure; this file only gives the commands short names.
+# Docker Compose owns the complete demo; this file only gives the commands short names.
 #
 # Works with GNU make on macOS, Linux and Windows (winget install ezwinports.make; Git for Windows
 # provides the bash the recipes run in, from cmd, PowerShell or Git Bash alike).
@@ -53,25 +53,27 @@ endif
 help: ## Show this list
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-check: ## Verify Java 25 and Docker are available
-	@java -version 2>&1 | head -n 1
-	@java -version 2>&1 | grep -q '"25' || { echo "Java 25 is required (JAVA_HOME points elsewhere)"; exit 1; }
+check: ## Verify Docker is available for the complete demo
 	@docker info > /dev/null 2>&1 && echo "docker: ok" || { echo "Docker is not running"; exit 1; }
+	@docker compose version
 
-# ---- infrastructure --------------------------------------------------------------------------
+# ---- complete demo ---------------------------------------------------------------------------
 
-up: ## Start PostgreSQL, RabbitMQ, Kafka, Debezium, Prometheus, Grafana and run the init containers
-	$(COMPOSE) up -d --wait
-	$(COMPOSE) --profile init up --force-recreate kafka-init connect-init
+up: ## Build and start all services in Docker, then register the Debezium connector
+	$(COMPOSE) up -d --build --wait
+	$(COMPOSE) --profile init run --rm --no-deps connect-init
 
-down: ## Stop the infrastructure, keep the data volumes
+down: ## Stop all services, keep the data volumes
 	$(COMPOSE) down
 
-clean: ## Stop the infrastructure and wipe all data volumes
+clean: ## Stop all services and wipe all data volumes
 	$(COMPOSE) down -v
 
 ps: ## Show container status
 	$(COMPOSE) ps
+
+logs: ## Follow Registry and Compliance logs (Ctrl+C stops watching)
+	$(COMPOSE) logs -f registry compliance
 
 connector: ## Show the Debezium connector status
 	@curl -s localhost:8083/connectors/registry-outbox/status; echo
@@ -81,25 +83,24 @@ lag: ## Show the Compliance consumer-group lag per partition
 
 # ---- build and test ---------------------------------------------------------------------------
 
-build: ## Package both services without running tests
-	$(REGISTRY_MVN) -q -DskipTests package
-	$(COMPLIANCE_MVN) -q -DskipTests package
+build: ## Build Registry and Compliance Docker images without starting them
+	$(COMPOSE) build registry compliance
 
-test: ## Run all tests of both services (needs Docker for Testcontainers)
+test: ## Run all tests on the host (Java 25 and Docker for Testcontainers)
 	$(REGISTRY_MVN) test
 	$(COMPLIANCE_MVN) test
 
-verify: ## Full Maven verify of both services
+verify: ## Full Maven verify on the host (Java 25 and Docker)
 	$(REGISTRY_MVN) verify
 	$(COMPLIANCE_MVN) verify
 
-# ---- run the services (each blocks its terminal) ---------------------------------------------
+# ---- rebuild or reload one application after make up ----------------------------------------
 
-registry: ## Run the Registry service on port 8080
-	$(REGISTRY_MVN) spring-boot:run
+registry: ## Rebuild and restart Registry in Docker; reload its application.properties
+	$(COMPOSE) up -d --no-deps --build --force-recreate --wait registry
 
-compliance: ## Run the Compliance service on port 8081
-	$(COMPLIANCE_MVN) spring-boot:run
+compliance: ## Rebuild and restart Compliance in Docker; reload its application.properties
+	$(COMPOSE) up -d --no-deps --build --force-recreate --wait compliance
 
 # ---- try it -----------------------------------------------------------------------------------
 
@@ -127,5 +128,5 @@ urls: ## Print the local URLs
 	@echo "Debezium Connect    http://localhost:8083/connectors/registry-outbox/status"
 	@echo "Grafana             http://localhost:3000/d/registration-case"
 
-.PHONY: help check up down clean ps connector lag build test verify registry compliance register smoke k6 \
+.PHONY: help check up down clean ps logs connector lag build test verify registry compliance register smoke k6 \
         k6-sync k6-batched urls

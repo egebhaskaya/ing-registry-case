@@ -12,6 +12,9 @@ A small Java 25 / Spring Boot case for exploring queues, connection limits and v
   collection delay and larger rollback scope for fewer database round trips and commits.
 - **Visible controls:** async consumer count, prefetch, shared pool size and virtual-thread mode are at the top of
   `application.properties`. Test scripts do not override application settings.
+- **One-command startup:** `make up` builds and runs both applications and their infrastructure in
+  Docker. Topics initialize before Compliance; connector registration follows Registry migrations.
+  Host Java 25 is needed only for optional host development and Maven tests.
 - **Plain JDBC:** repositories expose the SQL used in each transaction.
 - **Transactional outbox:** user and event commit atomically; Debezium reads committed changes and
   publishes to Kafka, avoiding an application database/broker dual write.

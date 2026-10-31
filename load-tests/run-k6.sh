@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the pinned grafana/k6 image by default, or a native k6 executable supplied as K6_BIN.
-# The container reaches the Registry API on the host through host.docker.internal.
+# Docker k6 joins the running Registry container's network, avoiding a trip through the host.
+# Native k6 uses the published localhost port; an explicit BASE_URL always wins.
 #
 # Usage:  load-tests/run-k6.sh                         # 10,000 iterations, 50 VUs
 #         ITERATIONS=500 VUS=20 load-tests/run-k6.sh
@@ -58,10 +59,26 @@ export MAX_DURATION="${MAX_DURATION:-10m}"
 export RATE="${RATE:-100}"
 export DURATION="${DURATION:-8760h}"
 export MAX_VUS="${MAX_VUS:-200}"
+network_args=()
+docker_network="${K6_DOCKER_NETWORK:-}"
 if [ -n "${K6_BIN:-}" ]; then
   export BASE_URL="${BASE_URL:-http://localhost:8080}"
 else
-  export BASE_URL="${BASE_URL:-http://host.docker.internal:8080}"
+  export MSYS_NO_PATHCONV=1
+  compose_file="$HERE/../infra/compose.yml"
+  if command -v cygpath > /dev/null 2>&1; then compose_file="$(cygpath -w "$compose_file")"; fi
+  if [ -z "$docker_network" ]; then
+    registry_id="$(docker compose -f "$compose_file" ps --status running -q registry)"
+    if [ -n "$registry_id" ]; then
+      docker_network="$(docker inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$registry_id" | head -n 1)"
+    fi
+  fi
+  if [ -n "$docker_network" ]; then
+    network_args=(--network "$docker_network")
+    export BASE_URL="${BASE_URL:-http://registry:8080}"
+  else
+    export BASE_URL="${BASE_URL:-http://host.docker.internal:8080}"
+  fi
 fi
 
 SCRIPTS_DIR="$HERE"
@@ -116,9 +133,10 @@ case "$host_gateway" in
   *) echo "DOCKER_HOST_GATEWAY must be auto, 0 or 1"; exit 2 ;;
 esac
 
-echo "k6: run id $RUN_ID, mode $MODE, $workload, target $BASE_URL"
+echo "k6: run id $RUN_ID, mode $MODE, $workload, target $BASE_URL${docker_network:+ (network $docker_network)}"
 status=0
 docker run --rm -i --name "registration-k6-$RUN_ID" \
+  "${network_args[@]}" \
   "${host_args[@]}" \
   -e BASE_URL -e MODE -e RUN_ID -e VUS -e ITERATIONS -e MAX_DURATION \
   -e CONTINUOUS -e RATE -e DURATION -e MAX_VUS \

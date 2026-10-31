@@ -1,7 +1,8 @@
 # Demo
 
 1. Start Docker, then run `make up` from the repository root.
-2. Run `make registry` and `make compliance` in separate terminals.
+2. Both applications now run in the background. Use `make ps` for status or `make logs` to watch them;
+   Ctrl+C stops watching logs without stopping the services.
 3. Open [Registration Case](http://localhost:3000/d/registration-case): Last 5 minutes, refresh 1s.
 4. Run `make k6`. Watch HTTP acceptance, Rabbit backlog, Registry commits and Compliance catching up.
    Wait for the queue to drain before the next run.
@@ -11,7 +12,7 @@
 6. Run `make k6-batched`. Requests still arrive one at a time and receive `202`; workers group them
    into database batches on a separate Rabbit queue. Watch Registry commits/s and database waiting,
    then wait for the batch queue and Compliance to drain. HTTP latency measures acceptance here too.
-7. Stop Registry, edit its `application.properties`, and restart with `make registry`. Change one
+7. Edit Registry's `application.properties`, then run `make registry` to rebuild/restart that container. Change one
    setting at a time: async Rabbit workers/prefetch, shared pool size or virtual-thread mode. Rabbit
    worker settings affect queued runs; pool and HTTP admission also govern `make k6-sync`.
    For batch comparisons, try `registry.batch.size=10`, `100`, then `250` with the same arrival rate.

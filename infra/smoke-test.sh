@@ -2,7 +2,7 @@
 # End-to-end smoke test against the local Compose stack (docs/design.md section 9: "verify the real
 # Debezium path in an end-to-end test or repeatable scripted smoke test").
 #
-# Prerequisites: the stack is up (compose + init profile) and BOTH services are running.
+# Prerequisite: make up has started the full stack and registered the connector.
 # Usage:  infra/smoke-test.sh            # 20 registrations
 #         COUNT=200 infra/smoke-test.sh  # more
 # Runs on Git Bash (Windows), macOS and Linux. Exit code 0 only when at least one registration was
